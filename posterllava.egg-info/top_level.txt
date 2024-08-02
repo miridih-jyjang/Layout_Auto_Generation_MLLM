@@ -1,0 +1,6 @@
+data
+huggingface
+llava
+logs
+output
+pretrained_model
