@@ -6,8 +6,8 @@ import json
 from tqdm import tqdm
 import shortuuid
 
-from llava.conversation import default_conversation
-from llava.utils import disable_torch_init
+from miridih_llava.conversation import default_conversation
+from miridih_llava.utils import disable_torch_init
 
 
 # new stopping implementation

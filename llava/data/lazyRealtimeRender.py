@@ -1,6 +1,6 @@
 from torch.utils.data import Dataset
 import transformers, json, os, torch, copy
-from llava.data import DataArguments, rank0_print, preprocess_multimodal, preprocess
+from miridih_llava.data import DataArguments, rank0_print, preprocess_multimodal, preprocess
 from typing import Dict
 from PIL import Image
 import re
@@ -114,19 +114,19 @@ class LazyRealTimeRenderingDataset(Dataset):
             page_num = int(page_num)
             image_file = f"{image_folder}/miridih/images/{template_id:08}/{page_num:03}/{ele_img_file}"
             overlay_img = Image.open(image_file).convert("RGBA")
-            ele_width, ele_height = anno['width'], anno['height']
-            x_offset, y_offset = anno['x'] - ele_width/2, anno['y'] - ele_height/2
-            overlay_img = overlay_img.resize((int(ele_width), int(ele_height)))
-            _, _, _, overlay_img_mask = overlay_img.split()
+            ele_width, ele_height = float(anno['width']), float(anno['height'])
 
+            x_offset, y_offset = float(anno['x']), float(anno['y'])
+            overlay_img = overlay_img.resize((max(1, round(ele_width)), max(1,round(ele_height))))
+            _, _, _, overlay_img_mask = overlay_img.split()
             rendering_image.paste(overlay_img, (int(x_offset), int(y_offset)), overlay_img_mask)
             merge_image = Image.alpha_composite(merge_image, rendering_image)
 
-        temp= anno['file_name'].replace('.png', f'_{idx+1}.png')
-        merge_image.save(f'{image_folder}/online_render/{temp}')
-        if not os.path.isfile(f"{image_folder}/online_render/{template_id:08}_{page_num:01}_0.png"):
-            thumbnail_img = Image.open(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png")
-            thumbnail_img.save(f'{image_folder}/online_render/{template_id:08}_{page_num:01}_0.png')
+        # temp= anno['file_name'].replace('.png', f'_{idx+1}.png')
+        # merge_image.save(f'{image_folder}/online_render/{temp}')
+        # if not os.path.isfile(f"{image_folder}/online_render/{template_id:08}_{page_num:01}_0.png"):
+        #     thumbnail_img = Image.open(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png")
+        #     thumbnail_img.save(f'{image_folder}/online_render/{template_id:08}_{page_num:01}_0.png')
         return merge_image
 
     def extract_unmasked_elements(self, bbox_html):

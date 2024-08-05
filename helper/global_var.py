@@ -551,3 +551,4 @@ MIRIDIH_TEMPLATE_TYPE={
         "vest_hor"
     ]
 }
+

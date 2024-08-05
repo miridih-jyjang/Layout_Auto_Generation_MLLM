@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence
-from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
-from llava import conversation as conversation_lib
+from miridih_llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from miridih_llava import conversation as conversation_lib
 import transformers, torch
-from llava.mm_utils import tokenizer_image_token
+from miridih_llava.mm_utils import tokenizer_image_token
 import copy
 
 @dataclass

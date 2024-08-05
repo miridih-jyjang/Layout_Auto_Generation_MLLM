@@ -26,13 +26,13 @@ import torch
 import wandb
 import transformers
 
-from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from miridih_llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from torch.utils.data import Dataset
-from llava.train.llava_trainer import LLaVATrainer
-from llava.data.lazyRealtimeRender import LazyRealTimeRenderingDataset
-from llava import conversation as conversation_lib
-from llava.model import *
-from llava.mm_utils import tokenizer_image_token
+from miridih_llava.train.llava_trainer import LLaVATrainer
+from miridih_llava.data.lazyRealtimeRender import LazyRealTimeRenderingDataset
+from miridih_llava import conversation as conversation_lib
+from miridih_llava.model import *
+from miridih_llava.mm_utils import tokenizer_image_token
 
 from PIL import Image
 from deepspeed.runtime.utils import see_memory_usage
@@ -764,7 +764,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 def train():
     global local_rank
-    wandb.init(project='posterLlava-miridih-instruction')
+    wandb.init(project='posterLlava-max25-miridih-instruction')
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()

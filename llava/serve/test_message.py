@@ -3,7 +3,7 @@ import json
 
 import requests
 
-from llava.conversation import default_conversation
+from miridih_llava.conversation import default_conversation
 
 
 def main():
