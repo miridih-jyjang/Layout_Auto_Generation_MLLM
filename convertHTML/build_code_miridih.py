@@ -59,8 +59,8 @@ def add_gaussian_noise_and_resample(ele, x_max, y_max, sigma=0.01):
         noise_h = np.random.normal(0, sigma)
         bbox['x'] = round(bbox['x']+(noise_x*x_max))
         bbox['y'] = round(bbox['y']+(noise_y*y_max))
-        bbox['w'] = round(bbox['w']+(noise_w*x_max))
-        bbox['h'] = round(bbox['h']+(noise_h*y_max))
+        bbox['w'] = max(round(bbox['w']+(noise_w*x_max)), 1.0)
+        bbox['h'] = max(round(bbox['h']+(noise_h*y_max)), 1.0)
         return bbox
     
 
@@ -130,7 +130,8 @@ class CustomDataLoader(DataLoader):
         self.consistency_num = args.consistency_num
         self.infilling = args.infilling
         self.max_ele_num = args.max_ele_num
-        
+        self.min_ele_num = args.min_ele_num
+
         
         
     def filter_invalid_num(self, lst, mask):
@@ -175,7 +176,7 @@ class CustomDataLoader(DataLoader):
                 ele_dict[key] = PLACE_HOLDER
         elif type == "refinement_html":
             ele_dict = add_gaussian_noise_and_resample(ele_dict,self.W,self.H)
-            
+
         return self.bbox_template.format(**ele_dict), answer_notepad
     
     
@@ -195,10 +196,10 @@ class CustomDataLoader(DataLoader):
             new_lst.append(line)
         return new_lst, new_ans
     
-    def convert_num_to_html(self, coord_lst=None, category_lst=None, filename_lst=None, self_consistency=False, consistency_num=10):
+    def convert_num_to_html(self, coord_lst=None, category_lst=None, filename_lst=None, self_consistency=False, consistency_num=10, min_max=[-1, -1]):
         batched_html_lst = []  # target
         batched_cond_cate, batched_cond_bbox = [], []  # condition
-        unconditional_ans=[]
+        unconditional_ans, completion_ans =[], []
         unconditional, refinement, random_mask, completion = [""], [], [], []
         cond_cate_to_size_pos, cond_cate_size_to_pos, cond_cate_pos_to_size = [], [], [] 
 
@@ -220,15 +221,17 @@ class CustomDataLoader(DataLoader):
                 i = 0
                 for coord, category, file_name in zip(coords, categories, filenames):
                     #content = text[0][i]
-                    w, h = int(coord[2]), int(coord[3]) 
-                    x, y = int(coord[0] - w / 2), int(coord[1] - h / 2) # c->xl, c->yl
+                    w, h = float(coord[2]), float(coord[3])
+                    x, y = coord[0] - w / 2, coord[1] - h / 2 # c->xl, c->yl
                     real_category = self.category_map[category]
                     all_category[category] += 1
                     ele_dict = {"c": real_category, "x": x, "y":y, "w":w, "h":h, "file_name": file_name}
                     #ele_dict = {"c": real_category, "x": x, "y":y, "w":w, "h":h, "content":content}
                     tmp1, _ = self.build_input_with_ele_dict(ele_dict, "html_content")
                     html_content.append(tmp1)
-                    
+                    completion_html.append(tmp1)
+                    completion_html_ans.append(tmp1)
+
                     # category mask to PLACE_HOLDER
                     tmp2, ans2 = self.build_input_with_ele_dict(ele_dict, "cate_mask_html") 
                     cate_mask_html.append(tmp2)
@@ -259,9 +262,9 @@ class CustomDataLoader(DataLoader):
                     size_mask_html.append(tmp8)
                     size_mask_html_ans.append(ans8)
                     # completion_html
-                    #tmp9, ans9 = self.build_input_with_ele_dict(ele_dict, "completion")
-                    #size_mask_html.append(tmp9)
-                    #size_mask_html_ans.append(ans9)        
+                    # tmp9, ans9 = self.build_input_with_ele_dict(ele_dict, "completion")
+                    # completion_html.append(tmp9)
+                    # completion_html_ans.append(ans9)
 
                     
                     i += 1
@@ -314,7 +317,7 @@ class CustomDataLoader(DataLoader):
                         random_mask.append("\n".join(new_random_mask_html)) 
                         completion_html_ans.append("\n".join(new_completion_html))
                         extract_index = random.randint(1,len(random_order))
-                        completion_html.append("\n".join(new_completion_html[:extract_index]))
+                        completion.append("\n".join(new_completion_html[:extract_index]))
                         refinement.append("\n".join(new_refinement))
                         
                 else:
@@ -327,7 +330,16 @@ class CustomDataLoader(DataLoader):
                     cond_cate_size_to_pos.append("\n".join(pos_mask_html))
                     cond_cate_pos_to_size.append("\n".join(size_mask_html))
                     random_mask.append("\n".join(random_mask_html))
-                
+                    refinement.append("\n".join(refinement_html))
+                    if min_max[0] != -1:
+                        extract_index = random.randint(max(1, min_max[0]-2),max(1, len(html_content)-1))
+                    else:
+                        extract_index = random.randint(1,len(html_content)-1)
+
+                    random_indices = random.sample(range(len(html_content)), extract_index)
+                    sorted_indices = sorted(random_indices)
+                    completion.append("\n".join([completion_html[i] for i in sorted_indices]))
+                    completion_ans.append('\n'.join(completion_html_ans))
         else:
             raise ValueError("Can not inplement to testing data")
         return {
@@ -339,7 +351,7 @@ class CustomDataLoader(DataLoader):
             "cond_cate_pos_to_size" : cond_cate_pos_to_size,
             "random_mask": random_mask,
             "unconditional" : unconditional*len(random_mask),
-            "completion" : completion_html,
+            "completion" : completion,
             "refinement" : refinement,
             "codegen_ans": {
                 "cate_mask_ans": cate_mask_ans,
@@ -348,7 +360,7 @@ class CustomDataLoader(DataLoader):
                 "pos_mask_ans": pos_mask_ans,
                 "size_mask_ans": size_mask_ans,
                 "random_mask_ans": random_mask_ans,
-                "completion_ans" : completion_html_ans
+                "completion_ans" : completion_ans
             },
         }
     
@@ -367,7 +379,7 @@ class CustomDataLoader(DataLoader):
         random.shuffle(shuffle_order)
         return shuffle_order
         
-    def custom_function(self, data, id_, self_consistency=True, consistency_num=10): 
+    def custom_function(self, data, id_, self_consistency=True, consistency_num=10, min_max=[-1,-1]):
         label, mask = to_dense_batch(data.y, data.batch)   # (B, S)
   
         bbox_real, _ = to_dense_batch(data.x, data.batch)  # (B, S, 4)
@@ -386,10 +398,10 @@ class CustomDataLoader(DataLoader):
             label_lst = self.filter_invalid_num(label, mask)        # [[2, 2, 3, 2]]
             real_idx = real_idx.to(torch.float).tolist()
             filename_lst = data.file_name
-            real_idx = round_nested_list(real_idx, 1)
+            real_idx = round_nested_list(real_idx, 2)
             bbox_lst = self.filter_invalid_num(real_idx, mask)      # 0:[[258.0, 72.5, 400.0, 61.0], [257.5, 134.5, 299.0, 33.0], [257.5, 696.5, 169.0, 37.0], [256.5, 695.5, 113.0, 25.0]]
             
-            preposed_res = self.convert_num_to_html(bbox_lst, label_lst, filename_lst, self_consistency=self_consistency, consistency_num=consistency_num)
+            preposed_res = self.convert_num_to_html(bbox_lst, label_lst, filename_lst, self_consistency=self_consistency, consistency_num=consistency_num, min_max=min_max)
              
             #preposed_res = self.convert_num_to_html(
             #    bbox_lst, label_lst, text, self_consistency=self_consistency, consistency_num=consistency_num
@@ -707,7 +719,7 @@ class CustomDataLoader(DataLoader):
     
     def __iter__(self): 
         for i, data in enumerate(super(CustomDataLoader, self).__iter__()):  
-            if len(data.batch) == 0:
+            if len(data.batch) <= self.min_ele_num:
                 continue
             if len(data.batch) > self.max_ele_num:
                 continue
@@ -715,7 +727,7 @@ class CustomDataLoader(DataLoader):
                 self_consistency = True
             else:
                 self_consistency = False
-            yield self.custom_function(data, i, self_consistency=self_consistency, consistency_num=self.consistency_num)  
+            yield self.custom_function(data, i, self_consistency=self_consistency, consistency_num=self.consistency_num, min_max=[self.min_ele_num, self.max_ele_num])
 
     
     @property
@@ -743,6 +755,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_name", type=str, default="rico25", help="dataset name")  
     parser.add_argument("--dataset_path", type=str, default="data/rico25-max25")
     parser.add_argument("--max_ele_num", type=int, default=25)
+    parser.add_argument("--min_ele_num", type=int, default=4)
     parser.add_argument("--save_path", type=str, default="data/rico25-max25/html_format")
     parser.add_argument("--model_path_or_name", type=str, default="meta-llama/Llama-2-7b-chat-hf", help="tokenizer model name")
     parser.add_argument("--bbox_quantization", type=str, default="code", choices=["code", "numerical"])
@@ -803,16 +816,14 @@ if __name__ == "__main__":
         print(f"begin to save train file >>> {args.save_path}")
         with tqdm(total=len(train_dataloader)) as pbar:
             for i, batch_inputs in enumerate(train_dataloader):
-                if args.consistency_num > 1:
-                    inner_batch = len(batch_inputs['cond_cate_to_size_pos_seq_modeling'])
-                    batch_inputs['name'] = batch_inputs['name']*inner_batch
-                    new_batch_inputs = [{} for i in range(inner_batch)]
-                    for k, v in batch_inputs.items():
-                        for i, value in enumerate(v):
-                            new_batch_inputs[i][k] = value    
-                    batch_inputs = new_batch_inputs
-                else:
-                    batch_inputs = [batch_inputs]
+                inner_batch = len(batch_inputs['cond_cate_to_size_pos_seq_modeling'])
+                batch_inputs['name'] = batch_inputs['name']*inner_batch
+                new_batch_inputs = [{} for i in range(inner_batch)]
+                for k, v in batch_inputs.items():
+                    for i, value in enumerate(v):
+                        new_batch_inputs[i][k] = value
+                batch_inputs = new_batch_inputs
+
                 all_train_data.extend(batch_inputs)
                 pbar.update(1)
         with open(train_file, "w") as f:
@@ -822,16 +833,14 @@ if __name__ == "__main__":
         print(f"training data saved done, begin to save eval dataset >>> {args.save_path}")
         with tqdm(total=len(eval_dataloader)) as pbar:
             for i, batch_inputs in enumerate(eval_dataloader):
-                if args.consistency_num > 1:
-                    inner_batch = len(batch_inputs['cond_cate_to_size_pos_seq_modeling'])
-                    batch_inputs['name'] = batch_inputs['name']*inner_batch
-                    new_batch_inputs = [{} for i in range(inner_batch)]
-                    for k, v in batch_inputs.items():
-                        for i, value in enumerate(v):
-                            new_batch_inputs[i][k] = value    
-                    batch_inputs = new_batch_inputs
-                else:
-                    batch_inputs = [batch_inputs]
+                inner_batch = len(batch_inputs['cond_cate_to_size_pos_seq_modeling'])
+                batch_inputs['name'] = batch_inputs['name']*inner_batch
+                new_batch_inputs = [{} for i in range(inner_batch)]
+                for k, v in batch_inputs.items():
+                    for i, value in enumerate(v):
+                        new_batch_inputs[i][k] = value
+                batch_inputs = new_batch_inputs
+
                 all_eval_data.extend(batch_inputs)
                 pbar.update(1)
         with open(val_file, "w") as f:
@@ -865,6 +874,3 @@ if __name__ == "__main__":
         with open(test_file, "w") as f:
             for line in all_test_data:
                 f.write(json.dumps(line) + "\n")
-    
-    
-    

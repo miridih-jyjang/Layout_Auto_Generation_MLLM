@@ -99,7 +99,7 @@ class MiriDihDataset(BaseDataset):
                                 xc = (x_m + w / 2)
                                 yc = (y_m + h / 2)
                                 
-                                b = [round(xc / W, 4), round(yc / H, 4), round(w / W, 4), round(h / H, 4)]
+                                b = [round(xc / W, 5), round(yc / H, 5), round(w / W, 5), round(h / H, 5)]
                                 
                                 cat = element['category_id']
                                 te = element.get('text', None)
@@ -154,4 +154,5 @@ class MiriDihDataset(BaseDataset):
     #                             '/home/jang/Documents/code/Miridih/data/metadata_elements_train_2.csv',
     #                             '/home/jang/Documents/code/Miridih/data/metadata_elements_train_3.csv'])
     # dataset.process()
+
 
