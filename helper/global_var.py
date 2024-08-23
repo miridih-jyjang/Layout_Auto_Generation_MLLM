@@ -13,6 +13,18 @@ MULTI_CHOICE = {
     "float2str": "",
 }
 
+CAT_MERGE = {"generalsvg": "svg", "shapesvg": "svg", "basicsvg": "svg",
+                     "photo": "image", "gif": "image",
+                     "text": "content", "grid": "content",
+                     "barcode": "code", "qrcode": "code",
+                     "chart": "chart",
+                     "lineshapeitem": "lsi", 
+                     "youtube": "animation", "video": "animation", "frameitem": "animation"}
+# text": "red", "underlay": "green", "embellishment": "blue", "false": "black
+MIRIDIH2QB = {"generalsvg": "object", "shapesvg": "object", "basicsvg": "object", "photo": "object",
+              "gif": "object", "text": "text", "grid": "frame", "barcode": "false", "qrcode": "false",
+              "chart": "frame", "lineshapeitem": "false", "youtube": "frame", "video": "frame",
+              "frameitem": "frame"}
 
 SPECIAL_TOKENS = ["<MASK>", "<PAD>", "<EOS>", "<BOS>", "<SEP>"]
 
@@ -21,6 +33,8 @@ IGNORE_INDEX = -100
 TEMPLATE_FORMAT = {
     "html_format": "<body> <svg width=\"{W}\" height=\"{H}\"> {content} </svg> </body>",
     "bbox_format": "<rect data-category=\"{c}\", x=\"{x}\", y=\"{y}\", width=\"{w}\", height=\"{h}\", file_name=\"{file_name}\"/>",
+    "json_bbox_format": "{'label': \"{c}\", 'box': [\"{x1}\", \"{y1}\", \"{x2}\", \"{y2}\"], 'file_name': \"{file_name}\"}",
+    'json_target': "Sure! Here is the design results: {bbox_json_list}"
 }
 
 TASK_INSTRUCTION = {
@@ -29,13 +43,28 @@ TASK_INSTRUCTION = {
     "magazine": "I want to generate layout in the magazine design format. ",
     "cgl" : "I want to generate layout in poster design format. ",
     "pku" : "I want to generate layout in poster design format. ",
-    "miridih": "I want to generate layout in {template_type} design format. "
+    "miridih_v3": "Could you please help me to place {num_ele} foreground elements over the background image of resolution {resolution} to craft an aesthetically pleasing, harmonious, balanced, and visually appealing web design with {template_type} style?\nFinding semantic-meaningful objects or visual foci on the background image at first might help in designing, and you should avoid any unnecessary blocking of them.\nPlease return the result by completing the following JSON file. Each element's location and size should be represented by a bounding box described as [left, top, right, bottom], and each number is a continuous digit from 0 to 1.",
+    "miridih_v2": "I want to generate layout in {template_type} design format. ",
+    "qbposter": "I want to generate layout in poster design format. "
 }
-#INSTRUCTION = {
-#    "cond_cate_to_size_pos": "please generate the layout html according to the categories I provide (in html format):\n###bbox html: {bbox_html}",
-#    "cond_cate_size_to_pos": "please generate the layout html according to the categories and size I provide (in html format):\n###bbox html: {bbox_html}",
-#    "cond_random_mask": "please recover the layout html according to the bbox, categories and size I provide (in html format):\n###bbox html: {bbox_html}"
-#}
+
+INSTRUCTION_JSON = {
+    # c -> s,b
+    "cond_cate_to_size_pos": "Please generate the layout according to the categories and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
+    # c,s -> b
+    "cond_cate_size_to_pos": "Please generate the layout style according to the bbox, categories, and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
+    # c,b -> s
+    "cond_cate_pos_to_size" : "Please generate the layout style according to the categories and position and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
+    # recover
+    "cond_random_mask": "Please recover the layout style according to the bbox, categories, and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
+    # unconditional
+    "unconditional" : "Plaese generate the layout style according to the image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
+    # refinement
+    "refinement" : "Please refine the layout style according to the image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
+    # completion 
+    "completion" : "Please complete the layout style according to the image and element I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
+}
+
 INSTRUCTION = {
     # c -> s,b
     "cond_cate_to_size_pos": "please generate the layout html according to the categories and image I provide (in html format):\n###bbox html: {bbox_html}",
@@ -51,34 +80,30 @@ INSTRUCTION = {
     "refinement" : "please refine the layout html according to the image I provide (in html format):\n###bbox html: {bbox_html}",#
     # completion 
     "completion" : "please complete the layout html according to the image and element I provide (in html format):\n###bbox html: {bbox_html}",#
-    
-
 }
 
 TEXT_INSTRUCTION = {
     # c -> s,b
-    "cond_cate_to_size_pos": "please generate the layout html according to the categories and image I provide (in html format)\nText: {text}\n###bbox html: {bbox_html}",
+    "cond_cate_to_size_pos": "please generate the layout html according to the categories and image I provide (in html format)\nText: {text}\nHere is the initial JSON file: {bbox_html}",
     # c,s -> b
-    "cond_cate_size_to_pos": "please generate the layout html according to the categories and size and image I provide (in html format)\nText: {text}\n###bbox html: {bbox_html}",
+    "cond_cate_size_to_pos": "please generate the layout html according to the categories and size and image I provide (in html format)\nText: {text}\nHere is the initial JSON file: {bbox_html}",
     # c,b -> s
-    "cond_cate_pos_to_size" : "please generate the layout html according to the categories and position and image I provide (in html format)\nText: {text}\n###bbox html: {bbox_html}",#
+    "cond_cate_pos_to_size" : "please generate the layout html according to the categories and position and image I provide (in html format)\nText: {text}\nHere is the initial JSON file: {bbox_html}",#
     # recover
-    "cond_random_mask": "please recover the layout html according to the bbox , categories, size, image I provide (in html format)\nText: {text}\n###bbox html: {bbox_html}",
+    "cond_random_mask": "please recover the layout html according to the bbox , categories, size, image I provide (in html format)\nText: {text}\nHere is the initial JSON file: {bbox_html}",
     # unconditional
-    "unconditional" : "plaese generate the layout html according to the image I provide (in html format)\nText: {text}\n###bbox html: {bbox_html}",#
+    "unconditional" : "plaese generate the layout html according to the image I provide (in html format)\nText: {text}\nHere is the initial JSON file: {bbox_html}",#
     # refinement
-    "refinement" : "please refine the layout html according to the image I provide (in html format)\nText: {text}\n###bbox html: {bbox_html}",#
+    "refinement" : "please refine the layout html according to the image I provide (in html format)\nText: {text}\nHere is the initial JSON file: {bbox_html}",#
     # completion 
-    "completion" : "please complete the layout html according to the image and element I provide (in html format)\nText: {text}\n###bbox html: {bbox_html}",#
-    
-
+    "completion" : "please complete the layout html according to the image and element I provide (in html format)\nText: {text}\nHere is the initial JSON file: {bbox_html}",#
 }
 
 
 INFILLING_INSTRUCTION = {
-    "cond_cate_to_size_pos": "please fulfilling the layout html according to the categories I provide (in html format):\n###bbox html: {bbox_html}",
-    "cond_cate_size_to_pos": "please fulfilling the layout html according to the categories and size I provide (in html format):\n###bbox html: {bbox_html}",
-    "cond_random_mask": "please recover the layout html according to the bbox, categories and size I provide (in html format):\n###bbox html: {bbox_html}"
+    "cond_cate_to_size_pos": "please fulfilling the layout html according to the categories I provide (in html format):\nHere is the initial JSON file: {bbox_html}",
+    "cond_cate_size_to_pos": "please fulfilling the layout html according to the categories and size I provide (in html format):\nHere is the initial JSON file: {bbox_html}",
+    "cond_random_mask": "please recover the layout html according to the bbox, categories and size I provide (in html format):\nHere is the initial JSON file: {bbox_html}"
 }
 
 SEP_SEQ = [
