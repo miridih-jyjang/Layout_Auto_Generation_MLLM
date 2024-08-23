@@ -107,7 +107,7 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_bias: str = "none"
     mm_projector_lr: Optional[float] = None
     group_by_modality_length: bool = field(default=False)
-
+    exp_name: str = field(default="", metadata={"help": "Experiment name"})
 
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
@@ -764,10 +764,14 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 def train():
     global local_rank
-    wandb.init(project='posterLlava-max25-miridih-instruction')
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    if training_args.exp_name == "":
+        wandb.init(project='posterLlava-max25-miridih-instruction')
+    else:
+        print("experiment: ", training_args.exp_name)
+        wandb.init(project='posterLlava-max25-miridih-instruction', name=training_args.exp_name)
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
 
