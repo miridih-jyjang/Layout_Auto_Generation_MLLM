@@ -32,7 +32,7 @@ DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
 DEFAULT_BOS_TOKEN = "</s>"
 DEFAULT_UNK_TOKEN = "</s>"
-SPAN_MASK_TOKEN = "<M>"
+SPAN_MASK_TOKEN = "<FILL_{i}>"
 SEP_TOKEN = "<sep>"
 PLACE_HOLDER = "<MASK>"
 
@@ -46,17 +46,18 @@ def round_nested_list(nested_list, decimals):
             result.append(round(item, decimals))  
     return result 
 
-def add_gaussian_noise_and_resample(ele, x_max, y_max, sigma=0.01):
-    def is_valid_bbox(bbox):
+def is_valid_bbox(bbox, x_max, y_max):
         return 0 <= bbox['x'] < x_max and 0 <= bbox['w'] < x_max  and 0 <= bbox['h'] < x_max and 0 <= bbox['y'] < y_max and 0 <= (bbox['x'] + bbox['w']) <= x_max and 1 <= (bbox['y'] + bbox['h']) <= y_max
+    
+def add_gaussian_noise_and_resample(ele, x_max, y_max, sigma=0.05):
     bbox = copy.deepcopy(ele)
-    if not is_valid_bbox(ele):
+    if not is_valid_bbox(ele, x_max, y_max):
         return ele
     def add_gaussian_noise(bbox):
         noise_x = np.random.normal(0, sigma)
         noise_y = np.random.normal(0, sigma)
-        noise_w = np.random.normal(0, sigma)
-        noise_h = np.random.normal(0, sigma)
+        noise_w = np.random.normal(0, bbox['w']/x_max/4)
+        noise_h = np.random.normal(0, bbox['h']/y_max/4)
         bbox['x'] = round(bbox['x']+(noise_x*x_max))
         bbox['y'] = round(bbox['y']+(noise_y*y_max))
         bbox['w'] = max(round(bbox['w']+(noise_w*x_max)), 1.0)
@@ -66,13 +67,22 @@ def add_gaussian_noise_and_resample(ele, x_max, y_max, sigma=0.01):
 
     bbox = add_gaussian_noise(bbox)
 
-    while not is_valid_bbox(bbox):
+    while not is_valid_bbox(bbox, x_max, y_max):
         bbox = copy.deepcopy(ele)
         add_gaussian_noise(bbox)
 
     return bbox
 
 class CustomDataLoader(DataLoader):  
+
+    cat_merge = {"generalsvg": "svg", "shapesvg": "svg", "basicsvg": "svg",
+                     "photo": "image", "gif": "image",
+                     "text": "content", "grid": "content",
+                     "barcode": "code", "qrcode": "code",
+                     "chart": "chart",
+                     "lineshapeitem": "lsi", 
+                     "youtube": "animation", "video": "animation", "frameitem": "animation"}
+    
     def __init__(
         self, 
         args,
@@ -131,8 +141,7 @@ class CustomDataLoader(DataLoader):
         self.infilling = args.infilling
         self.max_ele_num = args.max_ele_num
         self.min_ele_num = args.min_ele_num
-
-        
+        self.min_size = args.min_size
         
     def filter_invalid_num(self, lst, mask):
         new_lst = []
@@ -155,8 +164,6 @@ class CustomDataLoader(DataLoader):
             answer_notepad = [ele_dict[k] for k in ele_dict if k != "c"]
             # ele_dict = dict([(k, PLACE_HOLDER) for k in ele_dict.keys()])
             ele_dict = {k: PLACE_HOLDER if k != 'content' else ele_dict[k] for k in ele_dict.keys()}
-            if ele_dict.keys() == 'content':
-                ele_dict
             ele_dict["c"] = c
             ele_dict["file_name"] = file_name
         elif type == "size_mask_html":
@@ -168,7 +175,7 @@ class CustomDataLoader(DataLoader):
             ele_dict["x"] = PLACE_HOLDER
             ele_dict["y"] = PLACE_HOLDER
         elif type == "random_mask_html":
-            random_mask_num = random.choice([3, 4]) # mask up to 80% places (categoty is not masked)
+            random_mask_num = random.choice([1, 2]) # mask up to 50% places (categoty is not masked)
             selected_mask_element = random.sample(['x', 'y', 'w', 'h'], random_mask_num)
             answer_notepad = []
             for key in selected_mask_element:
@@ -176,7 +183,7 @@ class CustomDataLoader(DataLoader):
                 ele_dict[key] = PLACE_HOLDER
         elif type == "refinement_html":
             ele_dict = add_gaussian_noise_and_resample(ele_dict,self.W,self.H)
-
+        
         return self.bbox_template.format(**ele_dict), answer_notepad
     
     
@@ -221,17 +228,17 @@ class CustomDataLoader(DataLoader):
                 i = 0
                 for coord, category, file_name in zip(coords, categories, filenames):
                     #content = text[0][i]
-                    w, h = float(coord[2]), float(coord[3])
+                    w, h = float(coord[2]), float(coord[3]) 
                     x, y = coord[0] - w / 2, coord[1] - h / 2 # c->xl, c->yl
-                    real_category = self.category_map[category]
+                    real_category = self.cat_merge[self.category_map[category].lower()]
                     all_category[category] += 1
-                    ele_dict = {"c": real_category, "x": x, "y":y, "w":w, "h":h, "file_name": file_name}
-                    #ele_dict = {"c": real_category, "x": x, "y":y, "w":w, "h":h, "content":content}
+                    ele_dict = {"c": real_category, "x": round(x, 2), "y":round(y, 2), "w":round(w, 2), "h":round(h, 2), "file_name": file_name}
+                    # ele_dict = {"c": real_category, "x": x, "y":y, "w":w, "h":h, "content":content}
                     tmp1, _ = self.build_input_with_ele_dict(ele_dict, "html_content")
                     html_content.append(tmp1)
                     completion_html.append(tmp1)
                     completion_html_ans.append(tmp1)
-
+                    
                     # category mask to PLACE_HOLDER
                     tmp2, ans2 = self.build_input_with_ele_dict(ele_dict, "cate_mask_html") 
                     cate_mask_html.append(tmp2)
@@ -264,7 +271,7 @@ class CustomDataLoader(DataLoader):
                     # completion_html
                     # tmp9, ans9 = self.build_input_with_ele_dict(ele_dict, "completion")
                     # completion_html.append(tmp9)
-                    # completion_html_ans.append(ans9)
+                    # completion_html_ans.append(ans9)        
 
                     
                     i += 1
@@ -315,8 +322,9 @@ class CustomDataLoader(DataLoader):
                         cond_cate_size_to_pos.append("\n".join(new_pos_mask_html)) # cs -> p
                         cond_cate_pos_to_size.append("\n".join(new_size_mask_html)) # cp -> s
                         random_mask.append("\n".join(new_random_mask_html)) 
-                        completion_html_ans.append("\n".join(new_completion_html))
-                        extract_index = random.randint(1,len(random_order))
+                        completion_ans.append("\n".join(new_completion_html))
+                        # extract_index = random.randint(1,len(random_order))
+                        extract_index = random.randint(int(len(random_order)*0.7),len(random_order)-1)
                         completion.append("\n".join(new_completion_html[:extract_index]))
                         refinement.append("\n".join(new_refinement))
                         
@@ -330,15 +338,12 @@ class CustomDataLoader(DataLoader):
                     cond_cate_size_to_pos.append("\n".join(pos_mask_html))
                     cond_cate_pos_to_size.append("\n".join(size_mask_html))
                     random_mask.append("\n".join(random_mask_html))
-                    refinement.append("\n".join(refinement_html))
-                    if min_max[0] != -1:
-                        extract_index = random.randint(max(1, min_max[0]-2),max(1, len(html_content)-1))
-                    else:
-                        extract_index = random.randint(1,len(html_content)-1)
-
-                    random_indices = random.sample(range(len(html_content)), extract_index)
-                    sorted_indices = sorted(random_indices)
-                    completion.append("\n".join([completion_html[i] for i in sorted_indices]))
+                    refinement.append("\n".join(refinement_html)) 
+                    extract_index = random.randint(int(len(html_content)*0.7),len(html_content)-1)
+                    completion.append("\n".join(completion_html[:extract_index]))
+                    # random_indices = random.sample(range(len(html_content)), extract_index)
+                    # sorted_indices = sorted(random_indices)
+                    # completion.append("\n".join([completion_html[i] for i in sorted_indices]))
                     completion_ans.append('\n'.join(completion_html_ans))
         else:
             raise ValueError("Can not inplement to testing data")
@@ -378,8 +383,8 @@ class CustomDataLoader(DataLoader):
         shuffle_order = [i for i in range(len(lst))]
         random.shuffle(shuffle_order)
         return shuffle_order
-        
-    def custom_function(self, data, id_, self_consistency=True, consistency_num=10, min_max=[-1,-1]):
+    
+    def custom_function(self, data, id_, self_consistency=True, consistency_num=10, min_max=[-1,-1]): 
         label, mask = to_dense_batch(data.y, data.batch)   # (B, S)
   
         bbox_real, _ = to_dense_batch(data.x, data.batch)  # (B, S, 4)
@@ -719,7 +724,7 @@ class CustomDataLoader(DataLoader):
     
     def __iter__(self): 
         for i, data in enumerate(super(CustomDataLoader, self).__iter__()):  
-            if len(data.batch) <= self.min_ele_num:
+            if len(data.batch) < self.min_ele_num:
                 continue
             if len(data.batch) > self.max_ele_num:
                 continue
@@ -727,7 +732,7 @@ class CustomDataLoader(DataLoader):
                 self_consistency = True
             else:
                 self_consistency = False
-            yield self.custom_function(data, i, self_consistency=self_consistency, consistency_num=self.consistency_num, min_max=[self.min_ele_num, self.max_ele_num])
+            yield self.custom_function(data, i, self_consistency=self_consistency, consistency_num=self.consistency_num, min_max=[self.min_ele_num, self.max_ele_num])  
 
     
     @property
@@ -756,6 +761,9 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_path", type=str, default="data/rico25-max25")
     parser.add_argument("--max_ele_num", type=int, default=25)
     parser.add_argument("--min_ele_num", type=int, default=4)
+    parser.add_argument("--min_aspect_ratio", type=float, default=5)
+    parser.add_argument("--canvas_aspect_ratio", type=float, default=2)
+    parser.add_argument("--min_size", type=int, nargs=2, default=[0, 0], help="Minimum width and height.")
     parser.add_argument("--save_path", type=str, default="data/rico25-max25/html_format")
     parser.add_argument("--model_path_or_name", type=str, default="meta-llama/Llama-2-7b-chat-hf", help="tokenizer model name")
     parser.add_argument("--bbox_quantization", type=str, default="code", choices=["code", "numerical"])
@@ -780,6 +788,9 @@ if __name__ == "__main__":
             name=args.dataset_name,
             datapath=args.dataset_path,
             split='train',
+            min_size=args.min_size,
+            min_aspect_ratio=args.min_aspect_ratio,
+            canvas_aspect_ratio=args.canvas_aspect_ratio,
             #transform=T.Compose(transforms)
         )
         
@@ -787,6 +798,9 @@ if __name__ == "__main__":
             name=args.dataset_name,
             datapath=args.dataset_path,
             split='val',
+            min_size=args.min_size,
+            min_aspect_ratio=args.min_aspect_ratio,
+            canvas_aspect_ratio=args.canvas_aspect_ratio,
             #transform=T.Compose(transforms)
         )
         
@@ -821,7 +835,7 @@ if __name__ == "__main__":
                 new_batch_inputs = [{} for i in range(inner_batch)]
                 for k, v in batch_inputs.items():
                     for i, value in enumerate(v):
-                        new_batch_inputs[i][k] = value
+                        new_batch_inputs[i][k] = value    
                 batch_inputs = new_batch_inputs
 
                 all_train_data.extend(batch_inputs)
@@ -838,9 +852,9 @@ if __name__ == "__main__":
                 new_batch_inputs = [{} for i in range(inner_batch)]
                 for k, v in batch_inputs.items():
                     for i, value in enumerate(v):
-                        new_batch_inputs[i][k] = value
+                        new_batch_inputs[i][k] = value    
                 batch_inputs = new_batch_inputs
-
+                
                 all_eval_data.extend(batch_inputs)
                 pbar.update(1)
         with open(val_file, "w") as f:
@@ -869,7 +883,18 @@ if __name__ == "__main__":
         print("begin to save test file")
         with tqdm(total=len(test_dataloader)) as pbar:
             for i, batch_inputs in enumerate(test_dataloader):
-                all_test_data.append(batch_inputs)
+                inner_batch = len(batch_inputs['cond_bbox_input_seqs'])
+                batch_inputs['name'] = batch_inputs['name']*inner_batch
+                new_batch_inputs = [{} for i in range(inner_batch)]
+                for k, v in batch_inputs.items():
+                    if k == 'raw_data' or k == 'id_':
+                        continue
+                    else:
+                        for i, value in enumerate(v):
+                            new_batch_inputs[i][k] = value 
+
+                batch_inputs = new_batch_inputs
+                all_test_data.extend(batch_inputs)
                 pbar.update(1)
         with open(test_file, "w") as f:
             for line in all_test_data:
