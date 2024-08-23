@@ -24,7 +24,10 @@ class MiriDihDataset(BaseDataset):
                      "chart": "chart",
                      "lineshapeitem": "lsi", 
                      "youtube": "animation", "video": "animation", "frameitem": "animation"}
-    def __init__(self,dir,split,max_seq_length,transform=None):
+    def __init__(self,dir,split,max_seq_length,transform=None, min_size=[0,0], min_aspect_ratio=5, canvas_aspect_ratio=10):
+        self.min_size = min_size
+        self.min_aspect_ratio = min_aspect_ratio
+        self.canvas_aspect_ratio = canvas_aspect_ratio
         super().__init__(dir,split,transform)
         self.N_category = self.num_classes
         self.dataset_name = "miridih"
@@ -53,10 +56,11 @@ class MiriDihDataset(BaseDataset):
                     data.loc[:, 'priority'] = data['priority'].astype(float).astype(int)
                     data = data.sort_values(by='priority')
 
-                    for (template_idx, page_num), group in data.groupby(['template_idx', 'page_num']):
+                    for (template_idx, page_num), group in data.groupby(['template_idx', 'page_num']): 
                         W, H = -1, -1
                         super_template_type = None
                         box, label, text, attr, opacity, rot, file_names, priority = [], [], [], {}, [], [], [], []
+                        is_valid = True
                         for _, row in group.iterrows():
                             
                             if ('thumbnail' in row['image_file_name']) or ('skin' in row['image_file_name']):
@@ -72,6 +76,9 @@ class MiriDihDataset(BaseDataset):
                                     "NoiseAdded": False,
                                     "template_type": super_template_type
                                 }
+                                if W/H > self.canvas_aspect_ratio or W/H < 1/self.canvas_aspect_ratio:
+                                    is_valid = False
+                                    break
                                 continue
 
                             category = self.cat_merge[row['tag'].lower()]
@@ -82,11 +89,18 @@ class MiriDihDataset(BaseDataset):
                                 cat_id = self.labels.index(category)+1  # Assuming all elements have category_id 1 for this example
                             else:
                                 cat_id = 0
+                            
+                            if float(row['img_width']) <= self.min_size[0] or float(row['img_height']) <= self.min_size[1]:
+                                continue
+                            
+                            if float(row['img_width']) / float(row['img_height']) > self.min_aspect_ratio or float(row['img_width']) / float(row['img_height']) < 1/self.min_aspect_ratio:
+                                is_valid = False
+                                break
 
                             elements = [{
                                 'bbox': [float(row['left']), float(row['top']), float(row['img_width']), float(row['img_height'])],
-                                'category_id': cat_id,
                                 'text': row.get('text_content', None),
+                                'category_id': cat_id,
                                 'opacity': row['opacity'],
                                 'rotation': row['rotation'],
                                 'file_name': row['reformat_image_file_name'], 
@@ -99,7 +113,7 @@ class MiriDihDataset(BaseDataset):
                                 xc = (x_m + w / 2)
                                 yc = (y_m + h / 2)
                                 
-                                b = [round(xc / W, 5), round(yc / H, 5), round(w / W, 5), round(h / H, 5)]
+                                b = [round(xc / W, 2), round(yc / H, 2), round(w / W, 2), round(h / H, 2)]
                                 
                                 cat = element['category_id']
                                 te = element.get('text', None)
@@ -117,12 +131,12 @@ class MiriDihDataset(BaseDataset):
                                 else:
                                     text.append(te)
 
-                            
-                        data = Data(x=torch.tensor(box,dtype=torch.float),y=torch.tensor(label,dtype=torch.long),
-                                    text = text, opacity=opacity, rotation=rot, file_name=file_names, priority=priority)
-                        data.attr=attr
+                        if is_valid:
+                            data = Data(x=torch.tensor(box,dtype=torch.float),y=torch.tensor(label,dtype=torch.long),
+                                        text = text, opacity=opacity, rotation=rot, file_name=file_names, priority=priority)
+                            data.attr=attr
 
-                        data_list.append(data)
+                            data_list.append(data)
             
                 generator = torch.Generator().manual_seed(0)
                 indices = torch.randperm(len(data_list), generator=generator)  # shuffling
