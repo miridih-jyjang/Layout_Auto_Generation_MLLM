@@ -4,7 +4,7 @@
 
 # Need to call this before importing transformers.
 import sys
-sys.path.append("/workspace/Layout_Auto_Generation_MLLM")
+sys.path.append("/workspace/Layout_Auto_Generation_MLLM")  
 
 from miridih_llava.train.llama_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
 
