@@ -33,8 +33,8 @@ IGNORE_INDEX = -100
 TEMPLATE_FORMAT = {
     "html_format": "<body> <svg width=\"{W}\" height=\"{H}\"> {content} </svg> </body>",
     "bbox_format": "<rect data-category=\"{c}\", x=\"{x}\", y=\"{y}\", width=\"{w}\", height=\"{h}\", file_name=\"{file_name}\"/>",
-    "json_bbox_format": "{'label': \"{c}\", 'box': [\"{x1}\", \"{y1}\", \"{x2}\", \"{y2}\"], 'file_name': \"{file_name}\"}",
-    'json_target': "Sure! Here is the design results: {bbox_json_list}"
+    "json_bbox_format": "{label: \"{label}\", box: [\"{x1}\", \"{y1}\", \"{x2}\", \"{y2}\"], file_name: \"{file_name}\"}",
+    'json_target': "{bbox_json_list}"
 }
 
 TASK_INSTRUCTION = {
@@ -43,26 +43,26 @@ TASK_INSTRUCTION = {
     "magazine": "I want to generate layout in the magazine design format. ",
     "cgl" : "I want to generate layout in poster design format. ",
     "pku" : "I want to generate layout in poster design format. ",
-    "miridih_v3": "Could you please help me to place {num_ele} foreground elements over the background image of resolution {resolution} to craft an aesthetically pleasing, harmonious, balanced, and visually appealing web design with {template_type} style?\nFinding semantic-meaningful objects or visual foci on the background image at first might help in designing, and you should avoid any unnecessary blocking of them.\nPlease return the result by completing the following JSON file. Each element's location and size should be represented by a bounding box described as [left, top, right, bottom], and each number is a continuous digit from 0 to 1.",
-    "miridih_v2": "I want to generate layout in {template_type} design format. ",
+    "miridih_v4": "Could you please help me to place {num_ele} foreground elements over the background image of resolution {resolution} to craft an aesthetically pleasing, harmonious, balanced, and visually appealing web design with {template_type} style?\nFinding semantic-meaningful objects or visual foci on the background image at first might help in designing, and you should avoid any unnecessary blocking of them.\nPlease return the result by completing the following JSON file. Each element's location and size should be represented by a bounding box described as [left, top, right, bottom], and each number is a continuous digit from 0 to 1.",
+    "miridih_v3": "I want to generate layout in {template_type} design format. ",
     "qbposter": "I want to generate layout in poster design format. "
 }
 
 INSTRUCTION_JSON = {
     # c -> s,b
-    "cond_cate_to_size_pos": "Please generate the layout according to the categories and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
+    "cond_cate_to_size_pos": " Please generate the layout according to the categories and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
     # c,s -> b
-    "cond_cate_size_to_pos": "Please generate the layout style according to the bbox, categories, and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
+    "cond_cate_size_to_pos": " Please generate the layout style according to the bbox, categories, and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
     # c,b -> s
-    "cond_cate_pos_to_size" : "Please generate the layout style according to the categories and position and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
+    "cond_cate_pos_to_size" : " Please generate the layout style according to the categories and position and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
     # recover
-    "cond_random_mask": "Please recover the layout style according to the bbox, categories, and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
+    "cond_random_mask": " Please recover the layout style according to the bbox, categories, and image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",
     # unconditional
     "unconditional" : "Plaese generate the layout style according to the image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
     # refinement
-    "refinement" : "Please refine the layout style according to the image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
+    "refinement" : " Please refine the layout style according to the image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
     # completion 
-    "completion" : "Please complete the layout style according to the image and element I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
+    "completion" : " Please complete the layout style according to the image and element I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
 }
 
 INSTRUCTION = {
