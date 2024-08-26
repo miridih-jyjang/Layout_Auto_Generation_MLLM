@@ -29,7 +29,7 @@ import transformers
 from miridih_llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from torch.utils.data import Dataset
 from miridih_llava.train.llava_trainer import LLaVATrainer
-from miridih_llava.data.lazyRealtimeRender import LazyRealTimeRenderingDataset
+from miridih_llava.data.lazyRealtimeRender_v4 import LazyRealTimeRenderingDataset
 from miridih_llava import conversation as conversation_lib
 from miridih_llava.model import *
 from miridih_llava.mm_utils import tokenizer_image_token
