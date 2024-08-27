@@ -69,12 +69,25 @@ def get_json_response(response):
     return json_response
 
 def stringTojson_v4(s):
-    
+
+    def clean_float_string(s):
+        # Step 1: Remove leading/trailing whitespace
+        s = s.strip()
+
+        # Step 2: Replace multiple decimal points
+        # Find the first decimal point and split the string around it
+        if s.count('.') > 1:
+            # Keep only the first occurrence of a decimal point
+            parts = s.split('.', 1)
+            # Remove additional decimal points from the second part
+            s = parts[0] + '.' + parts[1].replace('.', '')
+
+        return s
     # Find all rect elements and their attributes within the SVG body
     rects = bbox_extract_wo_filename.findall(s)
     output = []
     for rect in rects:
-        output.append({'label': rect[0], 'box': rect[1].split(',')})
+        output.append({'label': rect[0], 'box': [clean_float_string(r) for r in rect[1].split(',')]})
     
     return output
 
@@ -106,7 +119,8 @@ def draw_box(img, elems, cls2color):
     return merge_image
 
 def draw_boxmap(json_response, valid_filenames, background_image, cls2color):
-    pic = background_image.convert("RGB")
+    ele_num = min(len(json_response), len(valid_filenames))
+    cls_box = [(file_name, elem['label'], elem['box']) for file_name, elem in zip(valid_filenames[:ele_num], json_response[:ele_num])]
     cls_box = [(file_name, elem['label'], elem['box']) for file_name, elem in zip(valid_filenames, json_response)]
     # print(cls_box)
     drawn = draw_box(background_image, cls_box, cls2color)
@@ -122,7 +136,7 @@ def load_image(image_file):
         image = Image.open(image_file).convert('RGB')
     return image
 
-def online_rendering(image_folder, skin_img_file, annotations, i_entry, args):
+def online_rendering(image_folder, skin_img_file, annotations, i_entry, args, task):
     rendering_image = Image.open(os.path.join(image_folder, skin_img_file))
     W, H = rendering_image.size
     merge_image = Image.new("RGBA", rendering_image.size)
@@ -145,8 +159,8 @@ def online_rendering(image_folder, skin_img_file, annotations, i_entry, args):
     if args.debug and len(annotations) > 0 and i_entry < 10:    
         image_file = f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
         
-        if ((i_entry+1) % 4 == 0) or ((i_entry+1) % 5 == 0): # completion & refinement
-            merge_image.convert('RGB').save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_{i_entry}_input.jpg"))
+        if (task == 'refine') or (task == 'complete'): # completion & refinement
+            merge_image.convert('RGB').save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_{task}_input.jpg"))
         if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_thumbnail.jpg")): # conditional
             thumbnail_img = Image.open(image_file).convert('RGB')
             thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_thumbnail.jpg"))
@@ -280,6 +294,8 @@ def main(args):
     data = json.load(open(args.json_file, 'r', encoding='utf-8'))
     ret, gt = {}, {}
     
+    os.makedirs(os.path.join('/'.join(args.output_file.split('/')[:-1]), 'gt'), exist_ok=True)
+    os.makedirs(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{args.output_file.split('/')[-1].replace('.json', '')}"), exist_ok=True)
     # streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
     erase_file_name = r",\s*'file_name':\s*'[^']*'"
     
@@ -302,19 +318,19 @@ def main(args):
         template_id = int(template_id)
         page_num = int(page_num)
         
-        if 'online_render' in entry['image']:
+        if ('refine' in entry['image']) or ('complete' in entry['image']):
             if os.path.isfile(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"):
                 image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
             else:
                 image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
-            image = online_rendering(args.data_path, image_file, merged_filelist, i_entry, args).convert('RGB')
+            image = online_rendering(args.data_path, image_file, merged_filelist, i_entry, args, entry['image']).convert('RGB')
         else:
             if os.path.isfile(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"):
                 image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
             else:
                 image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
             if len(invalid_filenames) > 0:
-                image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args).convert('RGB')
+                image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args, entry['image']).convert('RGB')
             else:
                 image = Image.open(os.path.join(args.data_path, image_file)).convert('RGB')
 
@@ -372,30 +388,30 @@ def main(args):
         conv.messages[-1][-1] = outputs
         ret[entry['id']].append(stringTojson_v4(outputs))
         gt[entry['id']].append(stringTojson_v4(entry['conversations'][1]['value']))
-        if args.debug:
-            # Save images with boxes
-            if i_entry < 10:
-                # for json_response in ret[entry['id']]:
-                    # assert(len(valid_filenames) == len(json_response))
-        
-                    # gt_img_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
-                    # gt_img = Image.open(os.path.join(args.data_path, gt_img_file)).convert('RGB')
-                if (i_entry+1) % 5 == 0: # refinement
-                    if os.path.isfile(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"):
-                        image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
-                    else:
-                        image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
-                    if len(invalid_filenames) > 0:
-                        args.debug = False
-                        image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args).convert('RGB')
-                        args.debug = True
-                    else:
-                        image = Image.open(os.path.join(args.data_path, image_file)).convert('RGB')
-                if "posterllava/posterllava_v0" in args.model_path:
-                    drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["QB"])  # Adjust the category as needed
+        if args.debug or args.image_out:
+            if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id:08}_{page_num:01}.jpg")):
+                try:
+                    thumbnail_image_file = f"{args.data_path}/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
+                    thumbnail_img = Image.open(thumbnail_image_file).convert('RGB')
+                    thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id:08}_{page_num:01}.jpg"))
+                except:
+                    print("{} is not existing!!".format(f"{template_id:08}_{page_num:01}.jpg"))
+            if entry['image'] == 'refine': # refinement
+                if os.path.isfile(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"):
+                    image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
                 else:
-                    drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["Miridih"])  # Adjust the category as needed
-                drawn_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{entry['id']}_{i_entry % 5}_boxed.jpg"))
+                    image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
+                if len(invalid_filenames) > 0:
+                    args.debug = False
+                    image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args, entry['image']).convert('RGB')
+                    args.debug = True
+                else:
+                    image = Image.open(os.path.join(args.data_path, image_file)).convert('RGB')
+            if "posterllava/posterllava_v0" in args.model_path:
+                drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["QB"])  # Adjust the category as needed
+            else:
+                drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["Miridih"])  # Adjust the category as needed
+            drawn_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{args.output_file.split('/')[-1].replace('.json', '')}/{entry['id']}.jpg"))
                     
                 
 
@@ -421,5 +437,6 @@ if __name__ == "__main__":
     parser.add_argument("--json-file", type=str, required=True)
     parser.add_argument("--num-gpus", type=int, default=1)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--image-out", action="store_true")
     args = parser.parse_args()
     main(args)
