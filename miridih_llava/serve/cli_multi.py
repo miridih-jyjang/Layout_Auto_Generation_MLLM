@@ -156,8 +156,8 @@ def draw_box(img, elems, cls2color):
     return merge_image
 
 def draw_boxmap(json_response, valid_filenames, background_image, cls2color):
-    pic = background_image.convert("RGB")
-    cls_box = [(file_name, elem['label'], elem['box']) for file_name, elem in zip(valid_filenames, json_response)]
+    ele_num = min(len(json_response), len(valid_filenames))
+    cls_box = [(file_name, elem['label'], elem['box']) for file_name, elem in zip(valid_filenames[:ele_num], json_response[:ele_num])]
     # print(cls_box)
     drawn = draw_box(background_image, cls_box, cls2color)
     return drawn.convert("RGB")
@@ -355,6 +355,7 @@ def main(args):
     data = json.load(open(args.json_file, 'r', encoding='utf-8'))
     ret, gt = {}, {}
     
+    os.makedirs(os.path.join('/'.join(args.output_file.split('/')[:-1]), "images"), exist_ok=True)
     # streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
     erase_file_name = r', file_name="[^"]*"\s*'
     
@@ -449,14 +450,18 @@ def main(args):
         conv.messages[-1][-1] = outputs
         ret[entry['id']].append(stringTojson_v2(outputs))
         gt[entry['id']].append(stringTojson_v2(entry['conversations'][1]['value']))
-        if args.debug:
-            # Save images with boxes
-            if i_entry < 10:
-                # for json_response in ret[entry['id']]:
-                    # assert(len(valid_filenames) == len(json_response))
-        
-                    # gt_img_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
-                    # gt_img = Image.open(os.path.join(args.data_path, gt_img_file)).convert('RGB')
+        if args.debug or args.image_out:
+            if ret[entry['id']][-1] == None:
+                print("template_page: {} for {} task had output None".format(entry['id'], i_entry%5))
+                continue
+            else:
+                # Save images with boxes
+                # if i_entry < 10:
+                    # for json_response in ret[entry['id']]:
+                        # assert(len(valid_filenames) == len(json_response))
+            
+                        # gt_img_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
+                        # gt_img = Image.open(os.path.join(args.data_path, gt_img_file)).convert('RGB')
                 if ((i_entry+1) % 4 == 0) or ((i_entry+1) % 5 == 0): # completion & refinement
                     if os.path.isfile(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"):
                         image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
@@ -470,7 +475,7 @@ def main(args):
                     drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["QB"])  # Adjust the category as needed
                 else:
                     drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["Miridih"])  # Adjust the category as needed
-                drawn_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{entry['id']}_{i_entry % 5}_boxed.jpg"))
+                drawn_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"images/{entry['id']}_{i_entry % 5}_boxed.jpg"))
                     
                 
 
@@ -496,5 +501,6 @@ if __name__ == "__main__":
     parser.add_argument("--json-file", type=str, required=True)
     parser.add_argument("--num-gpus", type=int, default=1)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--image-out", action="store_true")
     args = parser.parse_args()
     main(args)
