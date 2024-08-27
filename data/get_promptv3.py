@@ -40,16 +40,18 @@ def process_json(json_path):
             # else:
             #     continue
 
-            if key == "cond_cate_to_size_pos_seq_modeling" or "cond_cate_size_to_pos_seq_modeling" or key == "cond_cate_pos_to_size_seq_modeling" or \
+            if key == "cond_cate_size_to_pos_seq_modeling" or key == "cond_cate_pos_to_size_seq_modeling" or \
                 key == "cond_recover_mask_seq_modeling" or key == "cond_cate_size_to_pos_input_seqs" or key == "cond_cate_pos_to_size_input_seqs" or \
                 key == "cond_recover_mask_input_seqs":
                 if os.path.isfile(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"):
                     out_data["image"] = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
                 else:
                     out_data["image"] = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
-            elif key == "completion_seq_modeling" or key == "refinement_seq_modeling" or \
+            elif key == "completion_seq_modeling" or key == "completion_input_seqs":
+                out_data["image"] = "complete"
+            elif key == "refinement_seq_modeling" or key == "refinement_seq_modeling" or \
             key == "completion_input_seqs" or key == "refinement_input_seqs":
-                    out_data["image"] = "online_render"
+                out_data["image"] = "refine"
 
             else:
                 continue

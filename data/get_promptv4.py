@@ -51,9 +51,11 @@ def process_json(json_path):
                     out_data["image"] = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
                 else:
                     out_data["image"] = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
-            elif key == "completion_seq_modeling" or key == "refinement_seq_modeling" or \
+            elif key == "completion_seq_modeling" or key == "completion_input_seqs":
+                out_data["image"] = "complete"
+            elif key == "refinement_seq_modeling" or key == "refinement_seq_modeling" or \
             key == "completion_input_seqs" or key == "refinement_input_seqs":
-                out_data["image"] = "online_render"
+                out_data["image"] = "refine"
             else:
                 continue
             

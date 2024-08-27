@@ -121,7 +121,6 @@ def draw_box(img, elems, cls2color):
 def draw_boxmap(json_response, valid_filenames, background_image, cls2color):
     ele_num = min(len(json_response), len(valid_filenames))
     cls_box = [(file_name, elem['label'], elem['box']) for file_name, elem in zip(valid_filenames[:ele_num], json_response[:ele_num])]
-    cls_box = [(file_name, elem['label'], elem['box']) for file_name, elem in zip(valid_filenames, json_response)]
     # print(cls_box)
     drawn = draw_box(background_image, cls_box, cls2color)
     return drawn.convert("RGB")
