@@ -449,29 +449,32 @@ def main(args):
         ret[entry['id']].append(stringTojson_v2(outputs))
         gt[entry['id']].append(stringTojson_v2(entry['conversations'][1]['value']))
         if args.debug or args.image_out:
-            if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id:08}_{page_num:01}.jpg")):
-                try:
-                    thumbnail_image_file = f"{args.data_path}/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
-                    thumbnail_img = Image.open(thumbnail_image_file).convert('RGB')
-                    thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id:08}_{page_num:01}.jpg"))
-                except:
-                    print("{} is not existing!!".format(f"{template_id:08}_{page_num:01}.jpg"))
-            if entry['image'] == 'refine': # refinement
-                if os.path.isfile(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"):
-                    image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
-                else:
-                    image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
-                if len(invalid_filenames) > 0:
-                    args.debug = False
-                    image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args, entry['image']).convert('RGB')
-                    args.debug = True
-                else:
-                    image = Image.open(os.path.join(args.data_path, image_file)).convert('RGB')
-            if "posterllava/posterllava_v0" in args.model_path:
-                drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["QB"])  # Adjust the category as needed
+            if ret[entry['id']][-1] == None:
+                print("{} had output Nont". format(entry['id']))
             else:
-                drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["Miridih"])  # Adjust the category as needed
-            drawn_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{args.output_file.split('/')[-1].replace('.json', '')}/{entry['id']}.jpg"))
+                if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id:08}_{page_num:01}.jpg")):
+                    try:
+                        thumbnail_image_file = f"{args.data_path}/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
+                        thumbnail_img = Image.open(thumbnail_image_file).convert('RGB')
+                        thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id:08}_{page_num:01}.jpg"))
+                    except:
+                        print("{} is not existing!!".format(f"{template_id:08}_{page_num:01}.jpg"))
+                if entry['image'] == 'refine': # refinement
+                    if os.path.isfile(f"data/miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"):
+                        image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
+                    else:
+                        image_file = f"miridih/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_0.png"
+                    if len(invalid_filenames) > 0:
+                        args.debug = False
+                        image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args, entry['image']).convert('RGB')
+                        args.debug = True
+                    else:
+                        image = Image.open(os.path.join(args.data_path, image_file)).convert('RGB')
+                if "posterllava/posterllava_v0" in args.model_path:
+                    drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["QB"])  # Adjust the category as needed
+                else:
+                    drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["Miridih"])  # Adjust the category as needed
+                drawn_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{args.output_file.split('/')[-1].replace('.json', '')}/{entry['id']}.jpg"))
                 
 
 
