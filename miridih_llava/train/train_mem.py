@@ -5,6 +5,7 @@
 # Need to call this before importing transformers.
 import sys
 sys.path.append("/workspace/Layout_Auto_Generation_MLLM")  
+from setproctitle import setproctitle
 
 from miridih_llava.train.llama_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
 
@@ -13,4 +14,5 @@ replace_llama_attn_with_flash_attn()
 from miridih_llava.train.train import train
 
 if __name__ == "__main__":
+    setproctitle('MIRIDIH-JJY')
     train()

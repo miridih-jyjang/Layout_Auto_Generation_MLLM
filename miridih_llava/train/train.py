@@ -21,7 +21,6 @@ import json
 import logging
 import pathlib
 from typing import Dict, Optional, Sequence, List
-
 import torch
 import wandb
 import transformers
@@ -29,7 +28,6 @@ import transformers
 from miridih_llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from torch.utils.data import Dataset
 from miridih_llava.train.llava_trainer import LLaVATrainer
-from miridih_llava.data.lazyRealtimeRender_v4 import LazyRealTimeRenderingDataset
 from miridih_llava import conversation as conversation_lib
 from miridih_llava.model import *
 from miridih_llava.mm_utils import tokenizer_image_token
@@ -70,6 +68,8 @@ class DataArguments:
     image_folder: Optional[str] = field(default=None)
     image_aspect_ratio: str = 'square'
     image_grid_pinpoints: Optional[str] = field(default=None)
+    data_version: str = field(default='v1',
+                              metadata={"help": "Version of Training data"})
 
 
 @dataclass
@@ -750,6 +750,18 @@ class DataCollatorForSupervisedDataset(object):
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
+    if data_args.data_version == 'v4':
+        if 'miridih' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_v4 import LazyRealTimeRenderingDataset
+        elif 'crello' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_crello_v4 import LazyRealTimeRenderingDataset
+    elif data_args.data_version == 'v3':
+        if 'miridih' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender import LazyRealTimeRenderingDataset
+        elif 'crello' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_crello import LazyRealTimeRenderingDataset
+    else:
+        print("error for version")
     train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                 data_path=data_args.data_path,
                                 data_args=data_args)
