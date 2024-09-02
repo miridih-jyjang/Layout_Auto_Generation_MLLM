@@ -45,6 +45,8 @@ TASK_INSTRUCTION = {
     "pku" : "I want to generate layout in poster design format. ",
     "miridih_v4": "Could you please help me to place {num_ele} foreground elements over the background image of resolution {resolution} to craft an aesthetically pleasing, harmonious, balanced, and visually appealing web design with {template_type} style?\nFinding semantic-meaningful objects or visual foci on the background image at first might help in designing, and you should avoid any unnecessary blocking of them.\nPlease return the result by completing the following JSON file. Each element's location and size should be represented by a bounding box described as [left, top, right, bottom], and each number is a continuous digit from 0 to 1.",
     "miridih_v3": "I want to generate layout in {template_type} design format. ",
+    "crello_v3": "I want to generate layout in {template_type} design format. ",
+    "crello_v4": "Could you please help me to place {num_ele} foreground elements over the background image of resolution {resolution} to craft an aesthetically pleasing, harmonious, balanced, and visually appealing web design with {template_type} style?\nFinding semantic-meaningful objects or visual foci on the background image at first might help in designing, and you should avoid any unnecessary blocking of them.\nPlease return the result by completing the following JSON file. Each element's location and size should be represented by a bounding box described as [left, top, right, bottom], and each number is a continuous digit from 0 to 1.",
     "qbposter": "I want to generate layout in poster design format. "
 }
 
@@ -183,6 +185,13 @@ DATASET_META = {
         12: "Barcode",
         13: "YOUTUBE",
         14: "BASICSVG"
+    },
+    "crello":{
+        1: "svgElement",
+        2: "textElement",
+        3: "imageElement",
+        4: "coloredBackground",
+        5: "maskElement"
     }
 }
 
