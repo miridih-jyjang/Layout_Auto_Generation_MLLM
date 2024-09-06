@@ -57,7 +57,7 @@ class LazyRealTimeRenderingDataset(Dataset):
             processor = self.data_args.image_processor
             invalid_filenames, valid_filenames = self.extract_invalid_elements(sources[0]['conversations'][1]['value'])
             
-            if image_file == "online_render":
+            if image_file == "complete" or image_file == "refine":
                 # crello-v4/images/59b7a5501350e8329300f1e7_1.png
                 image_file = self.list_data_dict[i]['image']
                 merged_filelist = self.merge_lists_without_overlap(self.extract_unmasked_elements(sources[0]['conversations'][0]['value']), invalid_filenames)

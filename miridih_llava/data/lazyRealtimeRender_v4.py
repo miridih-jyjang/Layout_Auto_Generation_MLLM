@@ -318,7 +318,7 @@ if __name__ == "__main__":
         model_max_length = 4096
 
     class DataArguments:
-        image_folder = "./data"
+        image_folder = "/workspace/data"
         image_processor = transformers.AutoFeatureExtractor.from_pretrained("openai/clip-vit-large-patch14-336")
         image_aspect_ratio = "pad"
         is_multimodal = True
@@ -347,7 +347,7 @@ if __name__ == "__main__":
     conversation_lib = ConversationLib()
 
     # Path to the dataset JSON file
-    data_path = "data/miridih-max25-v4/annotations/train_llava_numerical.json"
+    data_path = "/workspace/data/miridih-max25-v4/annotations/train_llava_numerical.json"
 
     # Initialize the dataset
     dataset = LazyRealTimeRenderingDataset(data_path, tokenizer, data_args)
