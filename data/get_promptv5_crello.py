@@ -38,26 +38,25 @@ def process_json(json_path):
             
             # else:
             #     continue
-            if key == "cond_cate_pos_to_size_seq_modeling":
-                out_data["image"] = f"crello-v4/images/{template_id}_1.png"
-            # if key == "cond_cate_size_to_pos_seq_modeling" or key == "cond_cate_pos_to_size_seq_modeling" or \
-            #     key == "cond_recover_mask_seq_modeling" or key == "cond_cate_size_to_pos_input_seqs" or key == "cond_cate_pos_to_size_input_seqs" or \
-            #     key == "cond_recover_mask_input_seqs":
-            #     out_data["image"] = f"crello-v4/images/{template_id}_1.png"
-            # elif key == "completion_seq_modeling" or key == "completion_input_seqs":
-            #     out_data["image"] = "complete"
-            # elif key == "refinement_seq_modeling" or key == "refinement_seq_modeling" or \
-            # key == "completion_input_seqs" or key == "refinement_input_seqs":
-            #     out_data["image"] = "refine"
+            # if key == "cond_cate_pos_to_size_seq_modeling":
+            #     out_data["image"] = f"crello-v5/images/{template_id}_1.png"
+            if key == "cond_cate_size_to_pos_seq_modeling" or key == "cond_cate_pos_to_size_seq_modeling" or \
+                key == "cond_recover_mask_seq_modeling" or key == "cond_cate_size_to_pos_input_seqs" or key == "cond_cate_pos_to_size_input_seqs" or \
+                key == "cond_recover_mask_input_seqs" or key == "coord_pred_seq_modeling":
+                out_data["image"] = f"crello-v5/images/{template_id}_1.png"
+            elif key == "completion_seq_modeling" or key == "completion_input_seqs":
+                out_data["image"] = "complete"
+            elif key == "refinement_seq_modeling" or key == "refinement_seq_modeling" or \
+            key == "completion_input_seqs" or key == "refinement_input_seqs":
+                out_data["image"] = "refine"
             else:
                 continue
             
-                    
             parts = value.split("<MID>")
             if key == "completion_seq_modeling":
                 parts[0] = parts[0].replace('background', 'incompleted')
             elif key == "refinement_seq_modeling":
-                parts[0] = parts[0].replace('background', 'random distroted')
+                parts[0] = parts[0].replace('background', 'random distorted')
             # Extracting the <rect> elements and their attributes using regular expressions
         #     rects = re.findall(r'<rect[^>]*data-category="([^"]+)"[^>]*x="([^"]+)"[^>]*y="([^"]+)"[^>]*width="([^"]+)"[^>]*height="([^"]+)"', parts[0])
         #     # Create the JSON structure dynamically based on the number of <rect> elements
@@ -77,10 +76,19 @@ def process_json(json_path):
         #     domain_name="social media promotion poster with qbposter style",
         #     json_data=json.dumps(json_output)
         # )
-            conversation = [
-                {"from": "human", "value": "<image>\n"+parts[0].strip(' ')},
-                {"from": "gpt", "value": "Sure! Here is the design results: " + parts[1].strip()} if len(parts) > 1 else {"from": "gpt", "value": ""}
-            ]
+            if key == "coord_pred_seq_modeling":
+                parts[0] = parts[0].replace('background image', 'background image [IMG0]')
+                conversation = [
+                    {"from": "human", "value": "Background image is [IMG0] <image>\n"+parts[0].strip(' ')},
+                    {"from": "gpt", "value": "Sure! Here is the design results: " + parts[1].strip()} if len(parts) > 1 else {"from": "gpt", "value": ""}
+                ]
+            else:
+                # add [IMG] to the string
+                parts[0] = parts[0].replace('image ', 'image [IMG0] ')
+                conversation = [
+                    {"from": "human", "value": "Background image is [IMG0] <image>\n"+parts[0].strip(' ')},
+                    {"from": "gpt", "value": "Sure! Here is the design results: " + parts[1].strip()} if len(parts) > 1 else {"from": "gpt", "value": ""}
+                ]
 
             out_data["conversations"] = conversation
             out_json.append(out_data)
@@ -90,6 +98,7 @@ def process_json(json_path):
 def main(args):
     # process json
     json_path_list = glob.glob(os.path.join(args.json_path, "*.jsonl"))
+    os.makedirs(args.output_dir, exist_ok=True)
     # json_path_list = [args.json_path + '/val_llama_numerical.jsonl']
     for json_path in json_path_list:
         data = process_json(json_path)
@@ -134,10 +143,10 @@ def split_json_objects(file_content):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--json-path", type=str, default="/workspace/data/crello-v4/html_format/")
-    parser.add_argument("--train-image-root", type=str, default="/workspace/data/crello-v4/images")
-    parser.add_argument("--val-image-root", type=str, default="/workspace/data/crello-v4/images")
-    parser.add_argument("--output-dir", type=str, default="/workspace/data/crello-v4/annotations/")
+    parser.add_argument("--json-path", type=str, default="/workspace/data/crello-v5/html_format/")
+    parser.add_argument("--train-image-root", type=str, default="/workspace/data/crello-v5/images")
+    parser.add_argument("--val-image-root", type=str, default="/workspace/data/crello-v5/images")
+    parser.add_argument("--output-dir", type=str, default="/workspace/data/crello-v5/annotations/")
     parser.add_argument("-d", type=int, default=4, help='round to D decimal places')
     args = parser.parse_args()
     main(args)
