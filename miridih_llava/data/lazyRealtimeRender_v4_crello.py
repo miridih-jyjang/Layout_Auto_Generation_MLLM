@@ -59,7 +59,8 @@ class LazyRealTimeRenderingDataset(Dataset):
             
             if image_file == "complete" or image_file == "refine":
                 # crello-v4/images/59b7a5501350e8329300f1e7_1.png
-                image_file = self.list_data_dict[i]['image']
+                skin_image_file = self.list_data_dict[i]['id'].replace('_0', '_1.png')
+                image_file = f'crello-v4/images/{skin_image_file}'
                 merged_filelist = self.merge_lists_without_overlap(self.extract_unmasked_elements(sources[0]['conversations'][0]['value']), invalid_filenames)
                 image = self.online_rendering(image_folder, image_file, merged_filelist).convert('RGB')
                 
