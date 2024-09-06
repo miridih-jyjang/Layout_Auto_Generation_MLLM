@@ -47,7 +47,8 @@ TASK_INSTRUCTION = {
     "miridih_v3": "I want to generate layout in {template_type} design format. ",
     "crello_v3": "I want to generate layout in {template_type} design format. ",
     "crello_v4": "Could you please help me to place {num_ele} foreground elements over the background image of resolution {resolution} to craft an aesthetically pleasing, harmonious, balanced, and visually appealing web design with {template_type} style?\nFinding semantic-meaningful objects or visual foci on the background image at first might help in designing, and you should avoid any unnecessary blocking of them.\nPlease return the result by completing the following JSON file. Each element's location and size should be represented by a bounding box described as [left, top, right, bottom], and each number is a continuous digit from 0 to 1.",
-    "qbposter": "I want to generate layout in poster design format. "
+    "qbposter": "I want to generate layout in poster design format. ",
+    "crello_v5": "How can I design a {template_type} style design format with the following {num_ele} components? The a canvas has resolution {resolution}, width and height each.\nFinding semantic-meaningful objects or visual foci on the background image at first might help in designing, and you should avoid any unnecessary blocking of them.\nEach element's location and size should be represented by a bounding box described as [left, top, right, bottom], and each number is a continuous digit from 0 to 1."
 }
 
 INSTRUCTION_JSON = {
@@ -65,6 +66,8 @@ INSTRUCTION_JSON = {
     "refinement" : " Please refine the layout style according to the image I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
     # completion 
     "completion" : " Please complete the layout style according to the image and element I provide (in json format):\nHere is the initial JSON file: {bbox_json}",#
+    # coordinate prediction
+    "coord_pred": " Please generate the layouts of each elements according to the image of design elements I provide below. {bbox_json}"
 }
 
 INSTRUCTION = {
