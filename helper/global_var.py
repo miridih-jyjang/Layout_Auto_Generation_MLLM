@@ -27,7 +27,6 @@ MIRIDIH2QB = {"generalsvg": "object", "shapesvg": "object", "basicsvg": "object"
               "frameitem": "frame"}
 
 SPECIAL_TOKENS = ["<MASK>", "<PAD>", "<EOS>", "<BOS>", "<SEP>"]
-
 IGNORE_INDEX = -100
 
 TEMPLATE_FORMAT = {

@@ -714,6 +714,44 @@ class LazySupervisedDataset(Dataset):
 
 
 @dataclass
+class DataCollatorForSupervisedDataset_v5(object):
+    """Collate examples for supervised fine-tuning."""
+
+    tokenizer: transformers.PreTrainedTokenizer
+
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        input_ids, labels, pixel_values = tuple([instance[key] for instance in instances]
+                                  for key in ("input_ids", "labels", "pixel_values"))
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids,
+            batch_first=True,
+            padding_value=self.tokenizer.pad_token_id)
+        pixel_values = torch.nn.utils.rnn.pad_sequence(
+            pixel_values,
+            batch_first=True,
+            padding_value=self.tokenizer.pad_token_id)
+        labels = torch.nn.utils.rnn.pad_sequence(labels,
+                                                 batch_first=True,
+                                                 padding_value=IGNORE_INDEX)
+        input_ids = input_ids[:, :self.tokenizer.model_max_length]
+        labels = labels[:, :self.tokenizer.model_max_length]
+        batch = dict(
+            input_ids=input_ids,
+            labels=labels,
+            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            pixel_values=pixel_values
+        )
+
+        if 'image' in instances[0]:
+            images = [instance['image'] for instance in instances]
+            if all(x is not None and x.shape == images[0].shape for x in images):
+                batch['images'] = torch.stack(images)
+            else:
+                batch['images'] = images
+
+        return batch
+    
+@dataclass
 class DataCollatorForSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""
 
@@ -750,16 +788,21 @@ class DataCollatorForSupervisedDataset(object):
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    if data_args.data_version == 'v4':
+    if data_args.data_version == 'v5':
+        if 'miridih' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_v5 import LazyRealTimeRenderingDataset
+        elif 'crello' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_v5_crello import LazyRealTimeRenderingDataset
+    elif data_args.data_version == 'v4':
         if 'miridih' in data_args.data_path:
             from miridih_llava.data.lazyRealtimeRender_v4 import LazyRealTimeRenderingDataset
         elif 'crello' in data_args.data_path:
-            from miridih_llava.data.lazyRealtimeRender_crello_v4 import LazyRealTimeRenderingDataset
+            from miridih_llava.data.lazyRealtimeRender_v4_crello import LazyRealTimeRenderingDataset
     elif data_args.data_version == 'v3':
         if 'miridih' in data_args.data_path:
             from miridih_llava.data.lazyRealtimeRender import LazyRealTimeRenderingDataset
         elif 'crello' in data_args.data_path:
-            from miridih_llava.data.lazyRealtimeRender_crello import LazyRealTimeRenderingDataset
+            from miridih_llava.data.lazyRealtimeRender_v3_crello import LazyRealTimeRenderingDataset
     else:
         print("error for version")
     train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
@@ -768,7 +811,10 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
     dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                 data_path=data_args.dev_data_path,
                                 data_args=data_args)
-    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+    if data_args.data_version == 'v5':
+        data_collator = DataCollatorForSupervisedDataset_v5(tokenizer=tokenizer)
+    else:
+        data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     return dict(train_dataset=train_dataset,
                 eval_dataset=dev_dataset,
                 data_collator=data_collator)
@@ -780,10 +826,10 @@ def train():
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     if training_args.exp_name == "":
-        wandb.init(project='posterLlava-max25-miridih-instruction')
+        wandb.init(project='posterLlava-crello-instruction')
     else:
         print("experiment: ", training_args.exp_name)
-        wandb.init(project='posterLlava-max25-miridih-instruction', name=training_args.exp_name)
+        wandb.init(project='posterLlava-crello-instruction', name=training_args.exp_name)
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
 
@@ -818,11 +864,18 @@ def train():
                 **bnb_model_from_pretrained_args
             )
         else:
-            model = LlavaLlamaForCausalLM.from_pretrained(
+            if data_args.data_version == "v5":
+                model = LlavaLlamaForCausalLM_v5.from_pretrained(
                 model_args.model_name_or_path,
                 cache_dir=training_args.cache_dir,
                 **bnb_model_from_pretrained_args
             )
+            else:
+                model = LlavaLlamaForCausalLM.from_pretrained(
+                    model_args.model_name_or_path,
+                    cache_dir=training_args.cache_dir,
+                    **bnb_model_from_pretrained_args
+                )
     else:
         model = transformers.LlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,

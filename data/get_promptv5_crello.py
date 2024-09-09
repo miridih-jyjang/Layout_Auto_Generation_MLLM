@@ -42,13 +42,15 @@ def process_json(json_path):
             #     out_data["image"] = f"crello-v5/images/{template_id}_1.png"
             if key == "cond_cate_size_to_pos_seq_modeling" or key == "cond_cate_pos_to_size_seq_modeling" or \
                 key == "cond_recover_mask_seq_modeling" or key == "cond_cate_size_to_pos_input_seqs" or key == "cond_cate_pos_to_size_input_seqs" or \
-                key == "cond_recover_mask_input_seqs" or key == "coord_pred_seq_modeling":
+                key == "cond_recover_mask_input_seqs":
                 out_data["image"] = f"crello-v5/images/{template_id}_1.png"
             elif key == "completion_seq_modeling" or key == "completion_input_seqs":
                 out_data["image"] = "complete"
             elif key == "refinement_seq_modeling" or key == "refinement_seq_modeling" or \
             key == "completion_input_seqs" or key == "refinement_input_seqs":
                 out_data["image"] = "refine"
+            elif key == "coord_pred_seq_modeling":
+                out_data["image"] = "coord_pred"
             else:
                 continue
             

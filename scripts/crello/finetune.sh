@@ -2,13 +2,14 @@
 MASTER_PORT=29502
 PROMPT_VERSION=v1
 MODEL_VERSION="llava-v1.5-7b"
-exp_name=llava_v1.5_7b_crello_v4_2e
-epoch=2
+exp_name=llava_v1.5_7b_crello_v5_1e
+epoch=1
 batch_size_per_device=8
 acc_step=4
+data_version="v5"
 num_gpu=4
 samples_per_epoch=18768
-num_tasks=5
+num_tasks=6
  Ensure variables are properly assigned and do not contain zero values
 if [ $batch_size_per_device -eq 0 ] || [ $acc_step -eq 0 ] || [ $num_gpu -eq 0 ]; then
   echo "Error: batch_size_per_device, acc_step, or num_gpu cannot be zero."
@@ -53,6 +54,7 @@ deepspeed --include="localhost:0,1,2,3" --master_port=$MASTER_PORT miridih_llava
     --save_total_limit 2 \
     --learning_rate 2e-5 \
     --weight_decay 0. \
+    --data_version $data_version \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \
     --logging_steps 10 \
