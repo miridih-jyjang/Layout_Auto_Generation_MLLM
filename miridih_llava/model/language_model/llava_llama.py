@@ -157,17 +157,17 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
         else:
             image_features = self.encode_images(images)
         
-        if type(ele_images) is list or ele_images.ndim == 5:
-            concat_ele_images = torch.cat([image for image in ele_images], dim=0)
-            ele_image_features = self.encode_images(concat_ele_images)
-            split_sizes = [image.shape[0] for image in ele_images]
-            ele_image_features = torch.split(ele_image_features, split_sizes, dim=0)
-            ele_image_features = torch.concat([ele_image_feature.unsqueeze(0) for ele_image_feature in ele_image_features], dim=0)
+        if type(ele_images) is list or ele_images.ndim == 5: # B, N, 3, 336, 336
+            concat_ele_images = torch.cat([image for image in ele_images], dim=0) #  B*N, 3, 336, 336
+            ele_image_features = self.encode_images(concat_ele_images) # B*N, 576, 4096
+            split_sizes = [image.shape[0] for image in ele_images] # [N, N, N, .. ] * B개
+            ele_image_features = torch.split(ele_image_features, split_sizes, dim=0) #B * (N, 576, 4096)
+            ele_image_features = torch.concat([ele_image_feature.unsqueeze(0) for ele_image_feature in ele_image_features], dim=0) # B, N, 576, 4096
         else:
             ele_image_features = self.encode_images(ele_images)
 
         # merge skin image features with element image features
-        image_features = torch.concat([image_features.unsqueeze(1), ele_image_features], dim=1)
+        image_features = torch.concat([image_features.unsqueeze(1), ele_image_features], dim=1) # B, (N+1), 576, 4096
 
         new_input_embeds = []
         new_labels = [] if labels is not None else None
