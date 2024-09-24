@@ -24,16 +24,19 @@ from typing import Dict, Optional, Sequence, List
 import torch
 import wandb
 import transformers
+# import datasets
+from miridih_llava.constants import IGNORE_INDEX, MAX_ELE_NUM_CRELLO, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 
-from miridih_llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from torch.utils.data import Dataset
 from miridih_llava.train.llava_trainer import LLaVATrainer
 from miridih_llava import conversation as conversation_lib
 from miridih_llava.model import *
 from miridih_llava.mm_utils import tokenizer_image_token
-
 from PIL import Image
 from deepspeed.runtime.utils import see_memory_usage
+from torch.nn.functional import pad
+from miridih_llava.eval.eval_llava import compute_metrics
+# datasets.config.IN_MEMORY_MAX_SIZE = 300 *1024 *1024 *1024
 
 local_rank = None
 
@@ -70,7 +73,10 @@ class DataArguments:
     image_grid_pinpoints: Optional[str] = field(default=None)
     data_version: str = field(default='v1',
                               metadata={"help": "Version of Training data"})
-
+    ele_cache_path: str = field(default=None,
+                                metadata={"help": "Element clip encoded vectors."})
+    eval_ele_cache_path: str = field(default=None,
+                                metadata={"help": "Element clip encoded vectors."})
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -712,7 +718,135 @@ class LazySupervisedDataset(Dataset):
         
         return data_dict
 
+def pad_images(image, max_length):
+    mask = torch.zeros(max_length).bool()
 
+    # Handle the case where the image is a 0-dimensional tensor (scalar)
+    if image.numel() == 0:
+        # Pad the empty image to a size [1, 3, 336, 336] or similar default size
+        image = torch.zeros(1, 3, 336, 336)  # Replace with the appropriate shape
+    else:
+        # Update mask
+        mask[:image.shape[0]] = True
+    
+    pad_len = max_length - image.shape[0]
+
+    # If the image is empty or scalar, skip padding and return
+    if image.shape[0] == 0:
+        return image, mask
+    
+    
+    # Apply padding
+    image = pad(image, (0, 0, 0, 0, 0, 0, 0, pad_len))  # padding along the first dimension
+
+    return image, mask
+
+@dataclass
+class DataCollatorForSupervisedDataset_v6_4(object):
+    
+    """Collate examples for supervised fine-tuning."""
+
+    tokenizer: transformers.PreTrainedTokenizer
+
+    def pad_sequences(self, sequences, max_len, padding_value=0):
+        """
+        Pads a list of sequences to a fixed max length.
+        
+        Args:
+        sequences (list of torch.Tensor): List of sequences (1D tensors) of various lengths.
+        max_len (int): The fixed length to pad each sequence to.
+        padding_value (float or int, optional): The value used for padding. Default is 0.
+        
+        Returns:
+        torch.Tensor: A tensor of shape (batch_size, max_len) with padded sequences.
+        """
+        # Initialize a tensor with padding_value, shape = (batch_size, max_len)
+        batch_size = len(sequences)
+        padded_sequences = torch.full((batch_size, max_len), padding_value)
+        
+        for i, seq in enumerate(sequences):
+            seq_len = seq.size(0)  # Length of the current sequence
+            if seq_len <= max_len:
+                # Copy the sequence into the padded tensor (truncate if necessary)
+                padded_sequences[i, :seq_len] = seq
+            else:
+                # Optionally, handle cases where sequences are longer than max_len
+                padded_sequences[i, :] = seq[:max_len]
+
+        return padded_sequences
+
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        input_ids, labels, pixel_values = tuple([instance[key] for instance in instances]
+                                  for key in ("input_ids", "labels", "pixel_values"))
+        # input_ids = self.pad_sequences(
+        #     input_ids,
+        #     max_len=self.tokenizer.model_max_length,
+        #     padding_value=self.tokenizer.pad_token_id)
+        # mask_list, image_list = [], []
+        # # max_image_length = max([img.shape[0] for img in pixel_values])
+        # max_image_length = MAX_ELE_NUM_CRELLO
+        # if type(pixel_values) == list: 
+        #     # mask_list: [batch_size, MAX_ELE_NUM_CRELLO, 1]
+        #     mask_list = [torch.tensor([True] * len(pv) + [False] * (MAX_ELE_NUM_CRELLO - len(pv))).bool() for pv in pixel_values]
+        #     # pixel_values: [batch_size, num_elements, [1x1024]] -> [batch_size, MAX_ELE_NUM_CRELLO, [1x1024]]
+        #     image_list = [torch.tensor(pv + [[[0] * len(pv[0][0])]] * (MAX_ELE_NUM_CRELLO - len(pv))) if len(pv) < MAX_ELE_NUM_CRELLO else torch.tensor(pv) for pv in pixel_values]
+
+        # else:
+        #     for img in pixel_values:
+        #         image, img_mask = pad_images(img,max_image_length)
+        #         image_list.append(image)
+        #         mask_list.append(img_mask)
+        # pixel_values = torch.stack(image_list).to(input_ids.device)
+        # img_mask = torch.stack(mask_list).to(input_ids.device)
+       
+        # labels = self.pad_sequences(labels,
+        #                             max_len=self.tokenizer.model_max_length,
+                                    # padding_value=IGNORE_INDEX)
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids,
+            batch_first=True,
+            padding_value=self.tokenizer.pad_token_id)
+        mask_list, image_list = [], []
+        max_image_length = max([len(pv) for pv in pixel_values])
+        # max_image_length = MAX_ELE_NUM_CRELLO
+        if type(pixel_values) == list: 
+            # mask_list: [batch_size, MAX_ELE_NUM_CRELLO, 1]
+            mask_list = [torch.tensor([True] * len(pv) + [False] * (max_image_length - len(pv))).bool() for pv in pixel_values]
+            # pixel_values: [batch_size, num_elements, [1x1024]] -> [batch_size, MAX_ELE_NUM_CRELLO, [1x1024]]
+            image_list = [torch.tensor(pv + [[[0] * len(pv[0][0])]] * (max_image_length - len(pv))) if len(pv) < max_image_length else torch.tensor(pv) for pv in pixel_values]
+
+        else:
+            for img in pixel_values:
+                image, img_mask = pad_images(img,max_image_length)
+                image_list.append(image)
+                mask_list.append(img_mask).to(input_ids.device)
+        img_mask = torch.stack(mask_list).to(input_ids.device)
+        pixel_values = torch.stack(image_list).to(input_ids.device)
+
+        labels = torch.nn.utils.rnn.pad_sequence(labels,
+                                                 batch_first=True,
+                                                 padding_value=IGNORE_INDEX)
+        input_ids = input_ids[:, :self.tokenizer.model_max_length]
+        labels = labels[:, :self.tokenizer.model_max_length]
+        batch = dict(
+            input_ids=input_ids,
+            labels=labels,
+            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            pixel_values=pixel_values,
+            img_mask = img_mask
+        )
+
+        if 'image' in instances[0]:
+            images = [instance['image'] for instance in instances]
+            if all(x is not None and x.shape == images[0].shape for x in images):
+                batch['images'] = torch.stack(images)
+            else:
+                batch['images'] = images
+
+        return batch
+    
+	
+	
 @dataclass
 class DataCollatorForSupervisedDataset_v6(object):
     
