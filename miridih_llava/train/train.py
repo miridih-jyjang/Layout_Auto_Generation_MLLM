@@ -726,10 +726,16 @@ class DataCollatorForSupervisedDataset_v5(object):
             input_ids,
             batch_first=True,
             padding_value=self.tokenizer.pad_token_id)
-        pixel_values = torch.nn.utils.rnn.pad_sequence(
-            pixel_values,
-            batch_first=True,
-            padding_value=self.tokenizer.pad_token_id)
+        mask_list, image_list = [], []
+        # max_image_length = max([img.shape[0] for img in pixel_values])
+        max_image_length = MAX_ELE_NUM_CRELLO
+        for img in pixel_values:
+            image, img_mask = pad_images(img,max_image_length)
+            image_list.append(image)
+            mask_list.append(img_mask)
+        pixel_values = torch.stack(image_list).to(input_ids.device)
+        img_mask = torch.stack(mask_list).to(input_ids.device)
+        
         labels = torch.nn.utils.rnn.pad_sequence(labels,
                                                  batch_first=True,
                                                  padding_value=IGNORE_INDEX)
@@ -739,7 +745,8 @@ class DataCollatorForSupervisedDataset_v5(object):
             input_ids=input_ids,
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
-            pixel_values=pixel_values
+            pixel_values=pixel_values,
+            img_mask = img_mask
         )
 
         if 'image' in instances[0]:
@@ -750,7 +757,8 @@ class DataCollatorForSupervisedDataset_v5(object):
                 batch['images'] = images
 
         return batch
-    
+
+
 @dataclass
 class DataCollatorForSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""

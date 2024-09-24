@@ -21,6 +21,7 @@ from helper.global_var import *
 from collections import OrderedDict
 from typing import List, Dict  
 from tqdm import *
+import ast
 import numpy as np
 #from helper.metrics import *
 
@@ -62,6 +63,7 @@ def add_gaussian_noise_and_resample(ele, x_max, y_max, sigma=0.05):
         bbox['y1'] = max(round(bbox["y1"]+noise_y, 4), 0.0)
         bbox['x2'] = min(round(bbox["x2"]+noise_w, 4), 1.0)
         bbox['y2'] = min(round(bbox["y2"]+noise_h, 4), 1.0)
+        
         return bbox
     
 
@@ -171,7 +173,7 @@ class CustomDataLoader(DataLoader):
             ele_dict["x1"] = PLACE_HOLDER
             ele_dict["y1"] = PLACE_HOLDER
         elif type == "random_mask_html":
-            random_mask_num = random.choice([1, 2]) # mask up to 50% places (categoty is not masked)
+            random_mask_num = random.choice([1,2]) # mask up to 50% places (categoty is not masked)
             selected_mask_element = random.sample(["x1", "y1", "x2", "y2"], random_mask_num)
             answer_notepad = []
             for key in selected_mask_element:
@@ -188,7 +190,7 @@ class CustomDataLoader(DataLoader):
             for value in [ele_dict["x1"], ele_dict["y1"], ele_dict["x2"], ele_dict["y2"]]:
                 formatted_box.append(f"{value:.4f}")
             label, file_name = ele_dict["label"], ele_dict["file_name"]
-            answer_notepad = f"{{'label': '{label}', 'box': [{', '.join(formatted_box)}], 'file_name': '{file_name}', 'src': '[IMG{i+1}]'}}"
+            answer_notepad = f"{{'label': '{label}', 'box': [{', '.join(formatted_box)}], 'layer': {ele_dict['z']}, 'file_name': '{file_name}', 'src': '[IMG{i+1}]'}}"
             return result_string, answer_notepad
         
         formatted_box = []
@@ -198,7 +200,7 @@ class CustomDataLoader(DataLoader):
             else:
                 formatted_box.append(f"{value:.4f}")
         label, file_name = ele_dict["label"], ele_dict["file_name"]
-        result_string = f"{{'label': '{label}', 'box': [{', '.join(formatted_box)}], 'file_name': '{file_name}'}}"
+        result_string = f"{{'label': '{label}', 'box': [{', '.join(formatted_box)}], 'layer': {ele_dict['z']}, 'file_name': '{file_name}'}}"
 
         return result_string, answer_notepad
     
@@ -219,7 +221,7 @@ class CustomDataLoader(DataLoader):
             new_lst.append(line)
         return new_lst, new_ans
     
-    def convert_num_to_html(self, coord_lst=None, category_lst=None, filename_lst=None, self_consistency=False, consistency_num=10, canvas=[-1, -1]):
+    def convert_num_to_html(self, coord_lst=None, category_lst=None, filename_lst=None, priority_lst=None, self_consistency=False, consistency_num=10, canvas=[-1, -1]):
         batched_html_lst = []  # target
         batched_cond_cate, batched_cond_bbox = [], []  # condition
         unconditional_ans, completion_ans, coord_pred_ans =[], [], []
@@ -227,7 +229,7 @@ class CustomDataLoader(DataLoader):
         cond_cate_to_size_pos, cond_cate_size_to_pos, cond_cate_pos_to_size = [], [], [] 
 
         if coord_lst is not None and category_lst is not None: # create the training data   
-            for coords, categories, filenames in zip(coord_lst, category_lst, filename_lst):
+            for coords, categories, filenames, priorities in zip(coord_lst, category_lst, filename_lst, priority_lst):
                 #print(coords)
                 # store all the input code
                 html_content = []
@@ -246,14 +248,16 @@ class CustomDataLoader(DataLoader):
                     W, H = canvas
                 else:
                     W, H = 1, 1
-                for coord, category, file_name in zip(coords, categories, filenames):
+                
+                rand_idx_lst = random.sample(range(0, len(coords)), len(coords))
+                for coord, category, file_name, priority in zip(coords, categories, filenames, priorities):
                     #content = text[0][i]
                     w, h = float(coord[2]), float(coord[3]) 
                     x1, y1 = coord[0] - w / 2, coord[1] - h / 2 # c->xl, c->yl
                     x2, y2 = coord[0] + w / 2, coord[1] + h / 2 # c->xl, c->yl
                     real_category = self.category_map[category]
                     all_category[category] += 1
-                    ele_dict = {"label": real_category, "x1": round(x1/W, 4), "y1":round(y1/H, 4), "x2":round(x2/W, 4), "y2":round(y2/H, 2), "file_name": file_name}
+                    ele_dict = {"label": real_category, "x1": round(x1/W, 4), "y1":round(y1/H, 4), "x2":round(x2/W, 4), "y2":round(y2/H, 2), "z":int(priority), "file_name": file_name}
                     # ele_dict = {"label": real_category, "x": x, "y":y, "w":w, "h":h, "content":content}
                     tmp1, _ = self.build_input_with_ele_dict(ele_dict, "html_content")
                     html_content.append(tmp1)
@@ -291,7 +295,7 @@ class CustomDataLoader(DataLoader):
                     size_mask_html_ans.append(ans8)
 
                     # coord_pred_html
-                    ele_dict["src"] = i
+                    ele_dict["src"] = rand_idx_lst[i]
                     tmp9, ans9 = self.build_input_with_ele_dict(ele_dict, "coord_pred")
                     coord_pred_html.append(tmp9)
                     coord_pred_html_ans.append(ans9)        
@@ -364,12 +368,15 @@ class CustomDataLoader(DataLoader):
                     refinement.append("\n".join(refinement_html)) 
                     extract_index = random.randint(int(len(html_content)*0.7),len(html_content)-1)
                     completion.append("\n".join(completion_html[:extract_index]))
-                    coord_pred.append("\n".join(coord_pred_html))
+                    
+                    sorted_coord_pred_html = sorted(coord_pred_html, key=lambda x: int(x.split()[1]))
+                    sorted_coord_pred_html_ans = sorted(coord_pred_html_ans, key=lambda x: int(ast.literal_eval(x)['src'][4:-1]))
+                    coord_pred.append("\n".join(sorted_coord_pred_html))
                     # random_indices = random.sample(range(len(html_content)), extract_index)
                     # sorted_indices = sorted(random_indices)
                     # completion.append("\n".join([completion_html[i] for i in sorted_indices]))
                     completion_ans.append('\n'.join(completion_html_ans))
-                    coord_pred_ans.append('\n'.join(coord_pred_html_ans))
+                    coord_pred_ans.append('\n'.join(sorted_coord_pred_html_ans))
 
         else:
             raise ValueError("Can not inplement to testing data")
@@ -417,7 +424,6 @@ class CustomDataLoader(DataLoader):
 
         num_ele = data.x.shape[0]
         bbox_real, _ = to_dense_batch(data.x, data.batch)  # (B, S, 4)
-
         ####################### 
         #text = data.text
         ####################### 
@@ -429,13 +435,15 @@ class CustomDataLoader(DataLoader):
         real_idx = size_ * bbox_real # [cx, cy, w, h]
         if self.bbox_quantization == "code":
             label = label.to(torch.int).tolist()
+            priority = data.priority
             label_lst = self.filter_invalid_num(label, mask)        # [[2, 2, 3, 2]]
+            priority_lst = self.filter_invalid_num(priority, mask)
             real_idx = real_idx.to(torch.float).tolist()
             filename_lst = data.file_name
             real_idx = round_nested_list(real_idx, 2)
             bbox_lst = self.filter_invalid_num(real_idx, mask)      # 0:[[258.0, 72.5, 400.0, 61.0], [257.5, 134.5, 299.0, 33.0], [257.5, 696.5, 169.0, 37.0], [256.5, 695.5, 113.0, 25.0]]
             
-            preposed_res = self.convert_num_to_html(bbox_lst, label_lst, filename_lst, self_consistency=self_consistency, consistency_num=consistency_num, canvas=[W.item(), H.item()])
+            preposed_res = self.convert_num_to_html(bbox_lst, label_lst, filename_lst, priority_lst, self_consistency=self_consistency, consistency_num=consistency_num, canvas=[W.item(), H.item()])
              
             #preposed_res = self.convert_num_to_html(
             #    bbox_lst, label_lst, text, self_consistency=self_consistency, consistency_num=consistency_num

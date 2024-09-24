@@ -140,8 +140,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
     
     def prepare_inputs_labels_for_multimodal(
-        self, input_ids, attention_mask, past_key_values, labels, images, ele_images
-    ):
+        self, input_ids, attention_mask, past_key_values, labels, images, ele_images, img_mask):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[1] == 1:
@@ -155,19 +154,46 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
             image_features = torch.split(image_features, split_sizes, dim=0)
             image_features = [x.flatten(0, 1) for x in image_features]
         else:
+            self.model.vision_tower.select_feature = 'cls_patch'
             image_features = self.encode_images(images)
+            del images
         
-        if type(ele_images) is list or ele_images.ndim == 5: # B, N, 3, 336, 336
-            concat_ele_images = torch.cat([image for image in ele_images], dim=0) #  B*N, 3, 336, 336
-            ele_image_features = self.encode_images(concat_ele_images) # B*N, 576, 4096
-            split_sizes = [image.shape[0] for image in ele_images] # [N, N, N, .. ] * B개
-            ele_image_features = torch.split(ele_image_features, split_sizes, dim=0) #B * (N, 576, 4096)
-            ele_image_features = torch.concat([ele_image_feature.unsqueeze(0) for ele_image_feature in ele_image_features], dim=0) # B, N, 576, 4096
+        if type(ele_images) is list or ele_images.ndim == 5: # B, sum(N), 3, 336, 336 where N=[N_1+N_2+..+N_B]
+            ele_images = ele_images[img_mask.bool()] # [N_1+N_2+..+N_B] x 3, 336, 336
+            if len(ele_images) > 0:
+                self.model.vision_tower.select_feature = 'cls_patch'
+                ele_image_features = self.encode_images(ele_images) # [N_1+N_2+..+N_B], 576, 4096
+            
+            # ele_image_features = torch.split(ele_image_features, split_sizes, dim=0) #B * (N, 576, 4096)
+            # ele_image_features = torch.cat([ele_image_feature.unsqueeze(0) for ele_image_feature in ele_image_features], device=images.device, dim=0) # B, N, 576, 4096
+            # img_count = img_mask.sum(1).cumsum(0) # torch.tensor([N_1, N_2+N_1, ..., sum(N)])
+            # concat_ele_images, split_sizes = ele_images
+            # ele_image_features = self.encode_images(concat_ele_images) # B*N, 576, 4096
+            # ele_image_features = torch.split(ele_image_features, split_sizes, dim=0) #B * (N, 576, 4096)
+            # ele_image_features = [tensor.to(images.device) for tensor in ele_image_features]
+            
+            # ele_image_features = self.encode_images(ele_images) # sum(N), 576, 4096
+            img_count = img_mask.sum(1).cumsum(0)
+            # num_imgs = torch.tensor([p.shape[0] for p in ele_images], device=input_ids.device)
+            # ele_images = torch.cat(ele_images, dim=0).to(input_ids.device) # B*sum(N), 3, 336, 336
+            # ele_image_features = self.encode_images(ele_images) # B*sum(N), 576, 4096
+            # ele_image_features = torch.split(ele_image_features, num_imgs.tolist(), dim=0) #B * ([N_1, 576, 4096], [N_2, 576, 4096], ...)
+            
+        #     ele_image_features = [] # B *  [[N_1, 576, 4096], [N_2, 576, 4096], ...]
+        #     for p in ele_images:
+        #         ele_image_features.append(self.encode_images(p))
         else:
-            ele_image_features = self.encode_images(ele_images)
+            # ele_image_features = self.encode_images(ele_images)
+            ele_image_features = torch.empty(0).to(ele_images.device)
 
+        # # if ele_images.shape[0] > 0:
+        # #     # self.model.vision_tower.select_feature = 'cls_patch'
+        # #     ele_image_features = self.encode_images(ele_images) # sum(N), 1, 4096
+        # #     img_count = num_imgs.cumsum(0)
+        # # else:
+        # #     ele_image_features = torch.empty(0).to(ele_images.device)
+        # del ele_images
         # merge skin image features with element image features
-        image_features = torch.concat([image_features.unsqueeze(1), ele_image_features], dim=1) # B, (N+1), 576, 4096
 
         new_input_embeds = []
         new_labels = [] if labels is not None else None
@@ -187,13 +213,26 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
                 cur_image_idx += 1
                 continue
             image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0]
+            original_num_image_token_indices = len(image_token_indices)
+            # print("original_num_image_token_indices: ", original_num_image_token_indices)
+            # assert(len(image_token_indices) == ele_image_features.shape[0]+1)
             cur_new_input_embeds = []
             if labels is not None:
                 cur_labels = labels[batch_idx]
                 cur_new_labels = []
                 assert cur_labels.shape == cur_input_ids.shape
             while image_token_indices.numel() > 0:
-                cur_image_features = image_features[batch_idx][cur_image_idx]
+                if cur_image_idx == 0:
+                    cur_image_features = image_features[batch_idx]
+                else:
+                    try:
+                        if batch_idx == 0:
+                            cur_image_features = ele_image_features[:img_count[batch_idx]][cur_image_idx-1]
+                        else:
+                            cur_image_features = ele_image_features[img_count[batch_idx-1]:img_count[batch_idx]+1][cur_image_idx-1]
+                    except:
+                        print("img_count: {}\toriginal_num_image_token_indices: {}\nbatch_idx: {}\tcur_image_idx: {}\tele_image_features: {}".format(img_count, original_num_image_token_indices, batch_idx, cur_image_idx, ele_image_features.shape[0]))
+                    
                 image_token_start = image_token_indices[0]
                 if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
                     cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[:image_token_start-1]).detach())
@@ -231,7 +270,7 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
             if labels is not None:
                 cur_new_labels = torch.cat(cur_new_labels, dim=0)
                 new_labels.append(cur_new_labels)
-
+        
         if any(x.shape != new_input_embeds[0].shape for x in new_input_embeds):
             max_len = max(x.shape[0] for x in new_input_embeds)
 
@@ -283,6 +322,7 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
         images: Optional[torch.FloatTensor] = None,
         return_dict: Optional[bool] = None,
         pixel_values: Optional[torch.FloatTensor] = None,
+        img_mask: Optional[torch.Tensor] = None
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -290,7 +330,9 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        input_ids, attention_mask, past_key_values, inputs_embeds, labels = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images, pixel_values)
+        input_ids, attention_mask, past_key_values, inputs_embeds, labels = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images, pixel_values, img_mask)
+
+        del images, pixel_values
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
@@ -304,9 +346,19 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
             return_dict=return_dict
         )
 
-        hidden_states = outputs[0]
+        hidden_states = outputs[0] # [B, N_t, 4096] N_t: number of multi-modal tokens
         logits = self.lm_head(hidden_states)
-
+        
+        # # Zero-pad the logits to the specified length
+        # pad_length = self.model.config.max_length
+        # current_length = logits.size(1)
+        # if current_length < pad_length:
+        #     padding_size = pad_length - current_length
+        #     logits = pad(logits, (0, 0, 0, padding_size), value=0)  # Pad on the sequence length dimension
+        #     labels = pad(labels, (0, 0, 0, padding_size), value=IGNORE_INDEX)  # Pad on the sequence length dimension
+        # else:
+        #     logits = logits[:, :pad_length, :]
+        #     labels = labels[:, :pad_length]
         loss = None
         if labels is not None:
             # Shift so that tokens < n predict n
@@ -350,6 +402,8 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
                 "use_cache": kwargs.get("use_cache"),
                 "attention_mask": attention_mask,
                 "images": kwargs.get("images", None),
+                "pixel_values": kwargs.get("pixel_values", None),
+                "img_mask": kwargs.get("img_mask", None)
             }
         )
         return model_inputs

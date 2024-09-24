@@ -22,9 +22,12 @@ class LazyRealTimeRenderingDataset(Dataset):
         self.list_data_dict = list_data_dict
         self.data_args = data_args
         # self.bbox_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([0-9.,\s]*)\],\s*'file_name':\s*'([^']*)'")
-        self.bbox_extract =     re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)'")
-        self.bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+        self.bbox_extract =     re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[\s*(.*)\s*\],\s*'file_name':\s*'([^']*)'")
+        self.bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[\s*(.*)\s*\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+        self.bbox_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[\s*(.*)\s*\],\s*'layer':\s*(''|\d*),\s*'file_name':\s*'([^']*)'")
+        self.bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[\s*(.*)\s*\],\s*'layer':\s*(\d*|''),\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
         self.erase_file_name =  r",\s*'file_name':\s*'[^']*'"
+        # self.erase_image_token = "<image>.\n?"
         
     def __len__(self):
         return len(self.list_data_dict)
@@ -58,8 +61,7 @@ class LazyRealTimeRenderingDataset(Dataset):
             image_folder = self.data_args.image_folder
             processor = self.data_args.image_processor
             invalid_filenames, valid_filenames = self.extract_invalid_elements(sources[0]['conversations'][1]['value'])
-            if '5e8476964b3890eb07b30fd3' in image_file:
-                print("wait")
+
             if image_file == "complete" or image_file == "refine":
                 # crello-v5/images/59b7a5501350e8329300f1e7_1.png
                 skin_image_file = self.list_data_dict[i]['id'].replace('_0', '_1.png')
@@ -123,10 +125,18 @@ class LazyRealTimeRenderingDataset(Dataset):
             
             ## 2. remove file_name
             sources[0]['conversations'][0]['value'] = re.sub(self.erase_file_name, '', sources[0]['conversations'][0]['value'])
+            # sources[0]['conversations'][0]['value'] = re.sub(self.erase_image_token, '', sources[0]['conversations'][0]['value'])
             sources[0]['conversations'][1]['value'] = re.sub(self.erase_file_name, '', sources[0]['conversations'][1]['value'])   
+            
             
             ## 3. change valid elementsvalid_filenamesvalid_filenames
             sources[0]['conversations'][0]['value'] = re.sub(r'(\d+)\sforeground elements', f'{len(valid_filenames)} foreground elements', sources[0]['conversations'][0]['value'])
+            sources[0]['conversations'][0]['value'] = re.sub(r'unordered\s(\d+) components', f'unordered {len(valid_filenames)} components', sources[0]['conversations'][0]['value'])
+            
+            # if len(pixel_values) > 0 and len(valid_filenames)+1 != sources[0]['conversations'][0]['value'].count('<image>'):
+            #     print("task: {}\ttemplate: {}".format(self.list_data_dict[i]['image'], self.list_data_dict[i]['id']))
+            #     sources[0]['conversations']= self.remove_elements(sources[0]['conversations'], invalid_filenames)
+
             sources = [e["conversations"] for e in sources]
             # sources = preprocess_multimodal(
             #     copy.deepcopy([e["conversations"] for e in sources]),
@@ -141,9 +151,8 @@ class LazyRealTimeRenderingDataset(Dataset):
             sources[0]['conversations'][0]['value'] = re.sub(self.erase_file_name, '', sources[0]['conversations'][0]['value'])
             sources[0]['conversations'][1]['value'] = re.sub(self.erase_file_name, '', sources[0]['conversations'][1]['value']) 
            
-            ## 3. change valid elements
+            ## 3. change vali`d elements
             sources[0]['conversations'][0]['value'] = re.sub(r'(\d+)\sforeground elements', f'{len(valid_filenames)} foreground elements', sources[0]['conversations'][0]['value'])
-
             sources = copy.deepcopy([e["conversations"] for e in sources])
             
         data_dict = preprocess( 
@@ -164,9 +173,10 @@ class LazyRealTimeRenderingDataset(Dataset):
         
         if len(pixel_values) == 0:
             crop_size = self.data_args.image_processor.crop_size
-            data_dict['pixel_values'] = torch.zeros(1, 3, crop_size['height'], crop_size['width'])
+            data_dict['pixel_values'] = torch.empty(0)
         else:
             data_dict['pixel_values'] = torch.cat(pixel_values, dim=0)
+        
         return data_dict
 
     def modify_rects(self, input_string):
@@ -254,22 +264,40 @@ class LazyRealTimeRenderingDataset(Dataset):
     def extract_invalid_elements(self, bbox_html):
         # Extract all bounding boxes using the provided pattern
         if 'src' in bbox_html:
-            matches = self.bbox_src_extract.findall(bbox_html)
+            if 'layer' in bbox_html:
+                matches = self.bbox_src_layer_extract.findall(bbox_html)
+            else:
+                matches = self.bbox_src_extract.findall(bbox_html)
         else:
-            matches = self.bbox_extract.findall(bbox_html)
+            if 'layer' in bbox_html:
+                matches = self.bbox_layer_extract.findall(bbox_html)
+            else:
+                matches = self.bbox_extract.findall(bbox_html)
         
         # Find and return invalid elements
         invalid_elements, valid_elements = [], []
         for match in matches:
-            box = match[1].split(',')
-            category = match[0]
-            x1 = float(box[0])
-            y1 = float(box[1])
-            x2 = float(box[2])
-            y2 = float(box[3])
-            file_name = match[2]
-            if len(match) == 4:
-                src = match[3]
+            if 'layer' in bbox_html:
+                box = match[1].split(',')
+                category = match[0]
+                x1 = float(box[0])
+                y1 = float(box[1])
+                x2 = float(box[2])
+                y2 = float(box[3])
+                layer = match[2]
+                file_name = match[3]
+                if len(match) == 5:
+                    src = match[4]
+            else:
+                box = match[1].split(',')
+                category = match[0]
+                x1 = float(box[0])
+                y1 = float(box[1])
+                x2 = float(box[2])
+                y2 = float(box[3])
+                file_name = match[2]
+                if len(match) == 4:
+                    src = match[3]
 
             if x1 < 0 or y1 < 0 or x2 > 1 or y2 > 1:
                 temp_dict = {
@@ -280,13 +308,15 @@ class LazyRealTimeRenderingDataset(Dataset):
                     "x2": x2,
                     "y2": y2,
                 }
-                if len(match) == 4:
+                if 'layer' in bbox_html:
+                    temp_dict["layer"] = layer
+                if 'src' in bbox_html:
                     temp_dict["src"] = src
                 invalid_elements.append(temp_dict)
             else:
-                if len(match) == 4:
+                if 'src' in bbox_html:
                     valid_elements.append({'file_name': file_name,
-                                       'src': match[3]})
+                                       'src': src})
                 else:
                     valid_elements.append(file_name)
 
@@ -306,20 +336,46 @@ class LazyRealTimeRenderingDataset(Dataset):
 
                     if 'src' in filename_dict:
                         src = filename_dict['src']
-                        removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
-                            r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?),\s*(" +
-                            re.escape(format(y1, '.4f')) + r"|''|\d*\.?),\s*(" +
-                            re.escape(format(x2, '.4f')) + r"|''|\d*\.?),\s*(" +
-                            re.escape(format(y2, '.4f'  )) + r"|''|\d*\.?)\s*\],\s*'file_name':\s*'" +
-                            re.escape(file_name) + r"',\s*'src':\s*'" + re.escape(src) + r"'\}\n")
+                        if 'layer' in filename_dict:
+                            layer = filename_dict['layer']
+                            removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
+                                r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
+                                re.escape(format(y1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
+                                re.escape(format(x2, '.4f')) + r"|''|\d*\.\d+),\s*(" +
+                                re.escape(format(y2, '.4f')) + r"|''|\d*\.\d+)\],\s*'layer':\s*(" + re.escape(layer) + 
+                                r"|''|\d+)\s*,\s*'file_name':\s*'" + re.escape(file_name) +
+                                r"',\s*'src':\s*'" + re.escape(src) + r"'\}")
+                        else:
+                            removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
+                                r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?),\s*(" +
+                                re.escape(format(y1, '.4f')) + r"|''|\d*\.?),\s*(" +
+                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?),\s*(" +
+                                re.escape(format(y2, '.4f'  )) + r"|''|\d*\.?)\s*\],\s*'file_name':\s*'" +
+                                re.escape(file_name) + r"',\s*'src':\s*'" + re.escape(src) + r"'\}\n")
                     
                     else:
-                        # Create a regex pattern to match JSON objects with the same label and box coordinates
-                        removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
-                            r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?),\s*(" +
-                            re.escape(format(y1, '.4f')) + r"|''|\d*\.?),\s*(" +
-                            re.escape(format(x2, '.4f')) + r"|''|\d*\.?),\s*(" +
-                            re.escape(format(y2, '.4f')) + r"|''|\d*\.?)\s*\],\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
+                        if 'layer' in filename_dict:
+                            layer = filename_dict['layer']
+                            # Create a regex pattern to match JSON objects with the same label and box coordinates
+                            # removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
+                            #     r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?),\s*(" +
+                            #     re.escape(format(y1, '.4f')) + r"|''|\d*\.?),\s*(" +
+                            #     re.escape(format(x2, '.4f')) + r"|''|\d*\.?),\s*(" +
+                            #     re.escape(format(y2, '.4f')) + r")\],\s*'layer':\s*(" + re.escape(layer) + r"|''|\d*\.?)\s*\],\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
+                            removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
+                                r"',\s*'box':\s*\[\s*(''|" + re.escape(format(x1, '.4f')) + r"|\d*\.\d{4}),\s*(''|" +
+                                re.escape(format(y1, '.4f')) + r"|\d*\.\d{4}),\s*(''|" + re.escape(format(x2, '.4f')) + 
+                                r"|\d*\.\d{4}),\s*(''|" + re.escape(format(y2, '.4f')) + 
+                                r"|\d*\.\d{4})\],\s*'layer':\s*(''|" + re.escape(layer) + r"|\d*)\s*,\s*'file_name':\s*'" + 
+                                re.escape(file_name) + r"'\}")
+                            
+                        else:
+                            # Create a regex pattern to match JSON objects with the same label and box coordinates
+                            removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
+                                r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?),\s*(" +
+                                re.escape(format(y1, '.4f')) + r"|''|\d*\.?),\s*(" +
+                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?),\s*(" +
+                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?)\s*\],\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
 
                 else:
                     img_ref = filename_dict['src']       # This is the image reference (e.g., "[IMG1]", "[IMG2]")
@@ -327,9 +383,7 @@ class LazyRealTimeRenderingDataset(Dataset):
                     image_number = re.search(pattern, img_ref).group(1) # This is the integer part (e.g., "1" or "2")
                     
                     # Create the exact pattern for removal based on the match   
-                    removal_pattern = "image " + image_number + " is " + re.escape(img_ref) + " <image>.\n"
-                    
-       
+                    removal_pattern = "image " + image_number + " is " + re.escape(img_ref) + " <image>.\n?"       
 
                 # Substitute the pattern with an empty string
                 text = re.sub(removal_pattern, '', text)
@@ -396,7 +450,7 @@ if __name__ == "__main__":
     conversation_lib = ConversationLib()
 
     # Path to the dataset JSON file
-    data_path = "/workspace/data/crello-v5/annotations/train_llava_numerical.json"
+    data_path = "/workspace/data/crello-v5.2/annotations/train_llava_numerical.json"
 
     # Initialize the dataset
     dataset = LazyRealTimeRenderingDataset(data_path, tokenizer, data_args)

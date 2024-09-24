@@ -1,17 +1,19 @@
 #!/bin/bash
-ckpt_name=llava_v1.5_7b_crello_v4_1e
+ckpt_name=llava_v1.5_7b_crello_v6.0_1e
+num_gpu=1
 # ckpt_name=pretrained
 
 # Array of JSON files
-# json_files=("/data/checkpoints/jjy/$ckpt_name/val_c2ps.json"
-#              "/data/checkpoints/jjy/$ckpt_name/val_cp2s.json"
-#              "/data/checkpoints/jjy/$ckpt_name/val_cs2p.json"
-#              "/data/checkpoints/jjy/$ckpt_name/val_random.json"
-#              "/data/checkpoints/jjy/$ckpt_name/val_refine.json"
-#              "/data/checkpoints/jjy/$ckpt_name/val_complete.json")
-json_files=("/data/checkpoints/jjy/$ckpt_name/val_refine.json")
+#json_files=("/workspace/data/crello-v6/annotations/val_coord_pred.json"
+#            "/workspace/data/crello-v6/annotations/val_random.json"
+#            "/workspace/data/crello-v6/annotations/val_c2ps.json"
+#             "/workspace/data/crello-v6/annotations/val_cp2s.json"
+#             "/workspace/data/crello-v6/annotations/val_cs2p.json"
+#             "/workspace/data/crello-v6/annotations/val_refine.json"
+#             "/workspace/data/crello-v6/annotations/val_complete.json")
+json_files=("/workspace/data/crello-v6/annotations/val_coord_pred.json")
 # Output directory
-output_dir="output/$ckpt_name"
+output_dir="/data/checkpoints/jjy/$ckpt_name"
 
 # Make sure the output directory exists
 mkdir -p $output_dir
@@ -25,14 +27,15 @@ for i in "${!json_files[@]}"; do
 
     # Calculate the GPU index (e.g., mod the loop index with the number of available GPUs)
     #gpu_index=$((i % 8))  # Assuming you have 8 GPUs (0, 1, 2, 3, 4, 5, 6, 7)
-    gpu_index=$(((i % 2) + 6))
-
+    #gpu_index=$(((i % 8) + 3))
+    gpu_index=3
     # Run the command with the dynamically set GPU index
-    CUDA_VISIBLE_DEVICES=$gpu_index python miridih_llava/serve/cli_multi_v4_crello.py \
+    CUDA_VISIBLE_DEVICES=$gpu_index torchrun --nproc_per_node $num_gpu miridih_llava/serve/cli_multi_v6_crello.py \
     --model-path /data/checkpoints/jjy/$ckpt_name \
     --json-file ${json_files[$i]} \
     --output-file $output_file \
-    --num-gpus 1 --data-path ./data \
-    --image-out &
+    --max-new-tokens 4096 \
+    --num-gpus $num_gpu --data-path /workspace/data #\
+ #   --image-out 
 
 done

@@ -38,19 +38,19 @@ def process_json(json_path):
             
             # else:
             #     continue
-            # if key == "cond_cate_pos_to_size_seq_modeling":
-            #     out_data["image"] = f"crello-v5/images/{template_id}_1.png"
-            if key == "cond_cate_size_to_pos_seq_modeling" or key == "cond_cate_pos_to_size_seq_modeling" or \
-                key == "cond_recover_mask_seq_modeling" or key == "cond_cate_size_to_pos_input_seqs" or key == "cond_cate_pos_to_size_input_seqs" or \
-                key == "cond_recover_mask_input_seqs":
-                out_data["image"] = f"crello-v5/images/{template_id}_1.png"
-            elif key == "completion_seq_modeling" or key == "completion_input_seqs":
-                out_data["image"] = "complete"
-            elif key == "refinement_seq_modeling" or key == "refinement_seq_modeling" or \
-            key == "completion_input_seqs" or key == "refinement_input_seqs":
-                out_data["image"] = "refine"
-            elif key == "coord_pred_seq_modeling":
+            if key == "coord_pred_seq_modeling":
                 out_data["image"] = "coord_pred"
+            # if key == "cond_cate_size_to_pos_seq_modeling" or key == "cond_cate_pos_to_size_seq_modeling" or \
+            #     key == "cond_recover_mask_seq_modeling" or key == "cond_cate_size_to_pos_input_seqs" or key == "cond_cate_pos_to_size_input_seqs" or \
+            #     key == "cond_recover_mask_input_seqs":
+            #     out_data["image"] = f"crello-v5/images/{template_id}_1.png"
+            # elif key == "completion_seq_modeling" or key == "completion_input_seqs":
+            #     out_data["image"] = "complete"
+            # elif key == "refinement_seq_modeling" or key == "refinement_seq_modeling" or \
+            # key == "completion_input_seqs" or key == "refinement_input_seqs":
+            #     out_data["image"] = "refine"
+            # elif key == "coord_pred_seq_modeling":
+            #     out_data["image"] = "coord_pred"
             else:
                 continue
             
@@ -99,18 +99,18 @@ def process_json(json_path):
 
 def main(args):
     # process json
-    json_path_list = glob.glob(os.path.join(args.json_path, "*.jsonl"))
+    # json_path_list = glob.glob(os.path.join(args.json_path, "*.jsonl"))
     os.makedirs(args.output_dir, exist_ok=True)
-    # json_path_list = [args.json_path + '/val_llama_numerical.jsonl']
+    json_path_list = [args.json_path + '/val_llama_numerical.jsonl']
     for json_path in json_path_list:
         data = process_json(json_path)
 
         # write in a json format
-        if 'train' in json_path:
-            output_path = args.output_dir + "train_llava_numerical.json"
-        else:
-            output_path = args.output_dir + "val_llava_numerical.json"
-        #output_path = args.output_dir + "test_llava_numerical.json"
+        # if 'train' in json_path:
+        #     output_path = args.output_dir + "train_llava_numerical.json"
+        # else:
+        #     output_path = args.output_dir + "val_llava_numerical.json"
+        output_path = args.output_dir + "val_coord_pred.json"
         json.dump(data, open(output_path, 'w', encoding='utf-8'), indent=2)
         print(f"Data saved in {output_path}")
         
@@ -145,11 +145,10 @@ def split_json_objects(file_content):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--json-path", type=str, default="/workspace/data/crello-v5/html_format/")
-    parser.add_argument("--train-image-root", type=str, default="/workspace/data/crello-v5/images")
-    parser.add_argument("--val-image-root", type=str, default="/workspace/data/crello-v5/images")
-    parser.add_argument("--output-dir", type=str, default="/workspace/data/crello-v5/annotations/")
+    parser.add_argument("--json-path", type=str, default="/workspace/data/crello-v5.2/html_format/")
+    parser.add_argument("--train-image-root", type=str, default="/workspace/data/crello-v5.2/images")
+    parser.add_argument("--val-image-root", type=str, default="/workspace/data/crello-v5.2/images")
+    parser.add_argument("--output-dir", type=str, default="/workspace/data/crello-v5.2/annotations/")
     parser.add_argument("-d", type=int, default=4, help='round to D decimal places')
     args = parser.parse_args()
     main(args)
-
