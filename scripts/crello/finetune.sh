@@ -1,13 +1,16 @@
 #!/bin/bash
-MASTER_PORT=29502
+export NCCL_P2P_LEVEL=NVL
+
+MASTER_PORT=29503
 PROMPT_VERSION=v1
 MODEL_VERSION="llava-v1.5-7b"
-exp_name=llava_v1.5_7b_crello_v5_1e
+exp_name=llava_v1.5_7b_crello_v6.4_1e
+#exp_name=debug
 epoch=1
-batch_size_per_device=8
-acc_step=4
-data_version="v5"
-num_gpu=4
+batch_size_per_device=16
+acc_step=8
+data_version="v6.4"
+num_gpu=1
 samples_per_epoch=18768
 num_tasks=6
  Ensure variables are properly assigned and do not contain zero values
@@ -25,16 +28,15 @@ if [ -z "$max_steps" ] || [ "$max_steps" -eq 0 ]; then
   exit 1
 fi
 
-deepspeed --include="localhost:0,1,2,3" --master_port=$MASTER_PORT miridih_llava/train/train_mem.py \
-    --deepspeed ./scripts/zero3_offload.json \
-    --model_name_or_path liuhaotian/$MODEL_VERSION \
+deepspeed --include="localhost:7" --master_port=$MASTER_PORT miridih_llava/train/train_mem.py \
+    --deepspeed ./scripts/zero3_offload_v5.json \
     --version $PROMPT_VERSION \
-    --data_path /workspace/data/crello-v4/annotations/train_llava_numerical.json \
-    --dev_data_path /workspace/data/crello-v4/annotations/val_llava_numerical.json \
-    --data_version v4 \
+    --data_path /workspace/data/crello-v6.4/annotations/train_llava_numerical.json \
+    --dev_data_path /workspace/data/crello-v6.4/annotations/val_llava_numerical.json \
+    --ele_cache_path ./train_element_clip_features.json \
+    --eval_ele_cache_path ./eval_element_clip_features.json \
     --image_folder /workspace/data/ \
     --vision_tower openai/clip-vit-large-patch14-336 \
-    --pretrain_mm_mlp_adapter /data/checkpoints/hugging_face/$MODEL_VERSION/mm_projector.bin \
     --mm_projector_type mlp2x_gelu \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end False \
@@ -65,4 +67,6 @@ deepspeed --include="localhost:0,1,2,3" --master_port=$MASTER_PORT miridih_llava
     --dataloader_num_workers 2 \
     --lazy_preprocess True \
     --report_to wandb \
-    --exp_name $exp_name
+    --exp_name $exp_name \
+    --model_name_or_path liuhaotian/$MODEL_VERSION \
+    --pretrain_mm_mlp_adapter /data/checkpoints/hugging_face/$MODEL_VERSION/mm_projector.bin 

@@ -1,22 +1,30 @@
-import os
+import os, re
 import torch
-
+import time
 from torch.utils.data import Sampler
 from torch import nn
 from typing import Optional, Dict, Any, Union  # Import typing module
-from deepspeed.runtime.utils import see_memory_usage
-
+from torch.utils.data import DataLoader, Dataset
+from transformers import EvalPrediction
+from miridih_llava.train.trainer_pt_utils import EvalLoopContainer
+from transformers.trainer import denumpify_detensorize, find_batch_size, IterableDatasetShard
+from miridih_llava.train.trainer_utils import EvalLoopOutput
 from transformers import Trainer
 from transformers.trainer import (
     is_sagemaker_mp_enabled,
     get_parameter_names,
     has_length,
-    ALL_LAYERNORM_LAYERS,
     ShardedDDPOption,
+    ALL_LAYERNORM_LAYERS,
     logger,
 )
+import wandb
+from miridih_llava.constants import IGNORE_INDEX, MAX_ELE_NUM_CRELLO
+from helper.global_var import CONVERTED_DATASET_META
 from typing import List, Optional
 import gc
+from miridih_llava.mm_utils import KeywordsStoppingCriteria
+from transformers.deepspeed import deepspeed_init
 
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
@@ -134,8 +142,431 @@ class LengthGroupedSampler(Sampler):
 
 
 class LLaVATrainer(Trainer):
-   
+    def __init__(self, *args, **kwargs):
+        self.content_aware_layout_generation_compute_metrics = kwargs['content_aware_layout_generation_compute_metrics']
+        if 'crello' in kwargs['args'].exp_name:
+            self.dataset_name = 'crello'
+        elif 'miridih' in kwargs['args'].exp_name:
+            self.dataset_name = 'miridih'
+        else:
+            print("[WARNINGS] should rename expermient name for proper evaluation!!")
+            
+        del kwargs['content_aware_layout_generation_compute_metrics']
+        self.bbox_extract_wo_filename = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'src':\s*'([^']*)'")
+        super().__init__(*args, **kwargs)
+    
+    def _preprocess_logits_for_metrics(self, logits, labels):
+        ## detokenizer the logits to predictions
+        geo_preds, cat_preds, mask_preds, geo_gts, cat_gts, mask_gts = [], [], [], [], [], []
+        outputs = self.tokenizer.batch_decode(logits[:, labels[labels==IGNORE_INDEX].shape[0]:])
+        gts_string = self.tokenizer.batch_decode(labels[:, labels[labels==IGNORE_INDEX].shape[0]:])
+        def stringToTensor_v6(s):
+            def clean_float_string(s):
+                # Step 1: Remove leading/trailing whitespace
+                s = s.strip()
 
+                # Step 2: Replace multiple decimal points
+                # Find the first decimal point and split the string around it
+                if s.count('.') > 1:
+                    # Keep only the first occurrence of a decimal point
+                    parts = s.split('.', 1)
+                    # Remove additional decimal points from the second part
+                    s = parts[0] + '.' + parts[1].replace('.', '')
+
+                return s
+            # Find all rect elements and their attributes within the SVG body
+            rects = self.bbox_extract_wo_filename.findall(s)
+            geo, cat = [[-1, -1, -1, -1, -1]] * MAX_ELE_NUM_CRELLO, [-1] * MAX_ELE_NUM_CRELLO
+            mask = [[False, False, False, False, False]] * MAX_ELE_NUM_CRELLO
+            # torch.nn.utils.rnn.pad_sequence
+            for idx, rect in enumerate(rects):
+                geo[idx] = [float(clean_float_string(r)) for r in rect[1].split(',')] + [int(rect[2])]
+                cat[idx] = CONVERTED_DATASET_META[self.dataset_name][rect[0]]
+            mask[:len(rects)] = [[True, True, True, True, True]] * len(rects)
+            
+            geo = torch.tensor(geo).to(logits.device)
+            cat = torch.tensor(cat).to(logits.device)
+            mask = torch.tensor(mask).to(logits.device)
+            
+            return geo, cat, mask
+        
+        for output, gt in zip(outputs, gts_string):
+            geo_pred, cat_pred, mask_pred = stringToTensor_v6(output)
+            geo_preds.append(geo_pred)
+            cat_preds.append(cat_pred)
+            mask_preds.append(mask_pred)
+            geo_gt, cat_gt, mask_gt = stringToTensor_v6(gt)
+            geo_gts.append(geo_gt)
+            cat_gts.append(cat_gt)
+            mask_gts.append(mask_gt)
+
+        geo_preds = torch.stack(geo_preds)
+        cat_preds = torch.stack(cat_preds)
+        mask_preds = torch.stack(mask_preds)
+        geo_gts = torch.stack(geo_gts)
+        cat_gts = torch.stack(cat_gts)
+        mask_gts = torch.stack(mask_gts)
+        
+        return geo_preds, cat_preds, mask_preds, geo_gts, cat_gts, mask_gts
+
+    # def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
+    #     if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
+
+    #         logs: Dict[str, float] = {}
+
+    #         tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+
+    #         tr_loss -= tr_loss
+
+    #         logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+    #         logs["learning_rate"] = self._get_learning_rate()
+
+    #         self._total_loss_scalar += tr_loss_scalar
+    #         self._globalstep_last_logged = self.state.global_step
+    #         self.store_flos()
+
+    #         self.log(logs)
+
+    #     metrics = None
+    #     content_aware_layout_generation_metrics = None
+    #     if self.control.should_evaluate:
+    #         # metrics = self._evaluate(trial, ignore_keys_for_eval)
+    #         content_aware_layout_generation_metrics = self._content_aware_layout_generation_evaluate(trial, ignore_keys_for_eval)
+
+    #     if self.control.should_save:
+    #         # self._save_checkpoint(model, trial, metrics=metrics)
+    #         self._save_checkpoint(model, trial, metrics=content_aware_layout_generation_metrics)
+    #         self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+
+    def _content_aware_layout_generation_evaluate(self, trial, ignore_keys_for_eval, skip_scheduler=False):
+        metrics = self.content_aware_layout_generation_evaluate(ignore_keys=ignore_keys_for_eval)
+        self._report_to_hp_search(trial, self.state.global_step, metrics)
+
+        if isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau) and not skip_scheduler:
+            metric_to_check = self.args.metric_for_best_model
+            if not metric_to_check.startswith("eval_"):
+                metric_to_check = f"eval_{metric_to_check}"
+            try:
+                self.lr_scheduler.step(metrics[metric_to_check])
+            except KeyError as exc:
+                raise KeyError(
+                    f"The `metric_for_best_model` training argument is set to '{metric_to_check}', which is not found in the evaluation metrics. "
+                    f"The available evaluation metrics are: {list(metrics.keys())}. Consider changing the `metric_for_best_model` via the TrainingArguments."
+                ) from exc
+        return metrics
+
+    def content_aware_layout_generation_evaluate(
+        self,
+        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> Dict[str, float]:
+        override = eval_dataset is not None
+        eval_dataset = eval_dataset if override else None
+        if isinstance(eval_dataset, dict):
+            metrics = {}
+            for eval_dataset_name, _eval_dataset in eval_dataset.items():
+                dataset_metrics = self.content_aware_layout_generation_evaluate(
+                    eval_dataset=_eval_dataset if override else eval_dataset_name,
+                    ignore_keys=ignore_keys,
+                    metric_key_prefix=f"{metric_key_prefix}_{eval_dataset_name}",
+                )
+                metrics.update(dataset_metrics)
+            return metrics
+
+        self._memory_tracker.start()
+        
+        eval_dataloader = self.get_content_aware_layout_generation_eval_dataloader(eval_dataset)
+
+        start_time = time.time()
+        eval_loop = self.prediction_loop if self.args.use_legacy_prediction_loop else self.content_aware_layout_generation_evaluation_loop
+        output = eval_loop(
+            eval_dataloader,
+            description="Content Aware Layout Generation Evaluation",
+            prediction_loss_only=True if self.content_aware_layout_generation_compute_metrics is None else None,
+            ignore_keys=ignore_keys,
+            metric_key_prefix=metric_key_prefix,
+        )
+        total_batch_size = self.args.eval_batch_size * self.args.world_size
+        if f"{metric_key_prefix}_jit_compilation_time" in output.metrics:
+            start_time += output.metrics[f"{metric_key_prefix}_jit_compilation_time"]
+        if f"{metric_key_prefix}_model_preparation_time" in output.metrics:
+            start_time += output.metrics[f"{metric_key_prefix}_model_preparation_time"]
+
+        self.log(output.metrics)
+
+        self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, output.metrics)
+
+        self._memory_tracker.stop_and_update_metrics(output.metrics)
+
+        return output.metrics
+    
+    # def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+    #     # Move inputs to the correct device
+    #     inputs = self._prepare_inputs(inputs)
+        
+    #     # For text generation, we usually don't calculate loss, so skip that part.
+    #     # We'll also ignore `prediction_loss_only` for now as we're focusing on generation.
+        
+    #     # Call model.generate instead of a forward pass
+    #     with torch.no_grad():
+    #         # generated_tokens = model.generate(
+    #         #     input_ids=inputs['input_ids'],
+    #         #     attention_mask=inputs['attention_mask'],
+    #         #     pixel_values=inputs['pixel_values'],
+    #         #     max_length=4096,  
+    #         #     num_beams=5,  
+    #         #     early_stopping=True
+    #         # )
+    #         stop_str = '</s>'
+    #         keywords = [stop_str]
+    #         # stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, inputs['input_ids'])
+    #         generated_tokens = model.generate(
+    #             inputs['input_ids'],
+    #             images=inputs['images'],
+    #             pixel_values=inputs['pixel_values'],
+    #             img_mask=inputs['img_mask'],
+    #             do_sample=True,
+    #             temperature=0.2,
+    #             max_new_tokens=4096,
+    #             use_cache=True,
+    #             # stopping_criteria=[stopping_criteria]
+    #         )
+
+    #     return None, generated_tokens, inputs['labels']
+    
+    def content_aware_layout_generation_evaluation_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only: Optional[bool] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> EvalLoopOutput:
+        args = self.args
+        
+        prediction_loss_only = prediction_loss_only if prediction_loss_only is not None else args.prediction_loss_only
+
+        if self.is_deepspeed_enabled and self.deepspeed is None:
+            _, _ = deepspeed_init(self, num_training_steps=0, inference=True)
+
+        model = self._wrap_model(self.model, training=False, dataloader=dataloader)
+
+        if len(self.accelerator._models) == 0 and model is self.model:
+            start_time = time.time()
+            model = (
+                self.accelerator.prepare(model)
+                if self.is_deepspeed_enabled
+                else self.accelerator.prepare_model(model, evaluation_mode=True)
+            )
+            self.model_preparation_time = round(time.time() - start_time, 4)
+
+            if self.is_fsdp_enabled:
+                self.model = model
+
+            if model is not self.model:
+                self.model_wrapped = model
+
+            if self.is_deepspeed_enabled:
+                self.deepspeed = self.model_wrapped
+
+        if not self.is_in_train:
+            if args.fp16_full_eval:
+                model = model.to(dtype=torch.float16, device=args.device)
+            elif args.bf16_full_eval:
+                model = model.to(dtype=torch.bfloat16, device=args.device)
+
+        # batch_size = self.args.eval_batch_size
+        batch_size = 1
+
+        logger.info(f"\n***** Running {description} *****")
+        if has_length(dataloader):
+            logger.info(f"  Num examples = {self.num_examples(dataloader)}")
+        else:
+            logger.info("  Num examples: Unknown")
+        logger.info(f"  Batch size = 1")
+
+        model.eval()
+
+        self.callback_handler.eval_dataloader = dataloader
+        eval_dataset = getattr(dataloader, "dataset", None)
+
+        if args.past_index >= 0:
+            self._past = None
+
+        all_losses = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+        all_geo_preds = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+        all_cat_preds = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+        all_mask_preds = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+        all_geo_labels = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+        all_cat_labels = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+        all_mask_labels = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+        all_inputs = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+
+        metrics = None
+
+        observed_num_examples = 0
+        thumbnail_vector, elements_vector = {}, {}  # self.cache(args, dataloader, model, description)
+        
+        self.gather_function = self.accelerator.gather_for_metrics
+
+        for step, inputs in enumerate(dataloader):
+            observed_batch_size = find_batch_size(inputs)
+            if observed_batch_size is not None:
+                observed_num_examples += observed_batch_size
+                if batch_size is None:
+                    batch_size = observed_batch_size
+            
+            inputs = self._prepare_inputs(inputs)
+            # inputs have 'input_ids', 'labels', 'attention_mask', 'pixel_values', 'img_mask', 'images'
+            losses, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            
+            main_input_name = getattr(self.model, "main_input_name", "input_ids")
+            inputs_decode = self._prepare_input(inputs[main_input_name]) if args.include_inputs_for_metrics else None
+
+            if losses is not None:
+                losses = self.gather_function((losses.repeat(batch_size)))
+                all_losses.add(losses)
+            if inputs_decode is not None:
+                inputs_decode = self.accelerator.pad_across_processes(inputs_decode, dim=1, pad_index=-100)
+                inputs_decode = self.gather_function((inputs_decode))
+                if not self.args.batch_eval_metrics or description == "Prediction":
+                    all_inputs.add(inputs_decode)
+            if labels is not None:
+                labels = self.accelerator.pad_across_processes(labels, dim=1, pad_index=-100)
+            if logits is not None:
+                logits = self.accelerator.pad_across_processes(logits, dim=1, pad_index=-100)
+                if self._preprocess_logits_for_metrics is not None:
+                    geo_preds, cat_preds, mask_preds, geo_gts, cat_gts, mask_gts = self._preprocess_logits_for_metrics(logits, labels)
+                geo_preds = self.gather_function((geo_preds))
+                cat_preds = self.gather_function((cat_preds))
+                mask_preds = self.gather_function((mask_preds))
+                if not self.args.batch_eval_metrics or description == "Prediction":
+                    all_geo_preds.add(geo_preds)
+                    all_cat_preds.add(cat_preds)
+                    all_mask_preds.add(mask_preds)
+                geo_gts = self.gather_function((geo_gts))
+                cat_gts = self.gather_function((cat_gts))
+                mask_gts = self.gather_function((mask_gts))
+                if not self.args.batch_eval_metrics or description == "Prediction":
+                    all_geo_labels.add(geo_gts)
+                    all_cat_labels.add(cat_gts)
+                    all_mask_labels.add(mask_gts)
+            self.control = self.callback_handler.on_prediction_step(args, self.state, self.control)
+            
+            logits = (geo_preds, cat_preds, mask_preds)
+            labels = (geo_gts, cat_gts, mask_gts)
+
+            if self.args.batch_eval_metrics:
+                if self.content_aware_layout_generation_compute_metrics is not None and logits is not None and labels is not None:
+                    is_last_step = self.accelerator.gradient_state.end_of_dataloader
+                    if args.include_inputs_for_metrics:
+                        metrics = self.content_aware_layout_generation_compute_metrics(
+                            EvalPrediction(predictions=logits, label_ids=labels, inputs=inputs),
+                            compute_result=is_last_step,
+                        )
+                    else:
+                        metrics = self.content_aware_layout_generation_compute_metrics(
+                            EvalPrediction(predictions=logits, label_ids=labels),
+                            compute_result=is_last_step,
+                        )
+
+                del losses, logits, labels, inputs
+                torch.cuda.empty_cache()
+
+            elif args.eval_accumulation_steps is not None and (step + 1) % args.eval_accumulation_steps == 0:
+                all_losses.to_cpu_and_numpy()
+                all_geo_preds.to_cpu_and_numpy()
+                all_cat_preds.to_cpu_and_numpy()
+                all_mask_preds.to_cpu_and_numpy()
+                all_geo_labels.to_cpu_and_numpy()
+                all_cat_labels.to_cpu_and_numpy()
+                all_mask_labels.to_cpu_and_numpy()
+                all_inputs.to_cpu_and_numpy()
+                del losses, logits, labels, inputs
+                torch.cuda.empty_cache()
+        
+        if args.past_index and hasattr(self, "_past"):
+            delattr(self, "_past")
+
+        all_geo_preds = [t.to(dataloader.device) for t in all_geo_preds.tensors]
+        all_cat_preds = [t.to(dataloader.device) for t in all_cat_preds.tensors]
+        all_mask_preds = [t.to(dataloader.device) for t in all_mask_preds.tensors]
+        all_geo_labels = [t.to(dataloader.device) for t in all_geo_labels.tensors]
+        all_cat_labels = [t.to(dataloader.device) for t in all_cat_labels.tensors] 
+        all_mask_labels = [t.to(dataloader.device) for t in all_mask_labels.tensors]
+        all_inputs = all_inputs.tensors
+
+        if has_length(eval_dataset):
+            num_samples = len(eval_dataset)
+        elif isinstance(eval_dataset, IterableDatasetShard) and getattr(eval_dataset, "num_examples", 0) > 0:
+            num_samples = eval_dataset.num_examples
+        else:
+            if has_length(dataloader):
+                num_samples = self.num_examples(dataloader)
+            else:
+                num_samples = observed_num_examples
+        if num_samples == 0 and observed_num_examples > 0:
+            num_samples = observed_num_examples
+        if (
+            self.content_aware_layout_generation_compute_metrics is not None
+            and all_geo_preds is not None
+            and all_geo_labels is not None
+            and not self.args.batch_eval_metrics
+        ):
+            if args.include_inputs_for_metrics:
+                metrics = self.content_aware_layout_generation_compute_metrics(
+                    EvalPrediction(predictions=(all_geo_preds, all_cat_preds, all_mask_preds), label_ids=(all_geo_labels, all_cat_labels, all_mask_labels), inputs=all_inputs)
+                )
+            else:
+                metrics = self.content_aware_layout_generation_compute_metrics(EvalPrediction(predictions=(all_geo_preds, all_cat_preds, all_mask_preds), label_ids=(all_geo_labels, all_cat_labels, all_mask_labels)), device=dataloader.device)
+        elif metrics is None:
+            metrics = {}
+        metrics = denumpify_detensorize(metrics)
+        for key in list(metrics.keys()):
+            if not key.startswith(f"{metric_key_prefix}_"):
+                metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
+        # for key in list(metrics.keys()):
+        #     if not (key.startswith(f'{metric_key_prefix}_Recall') or key.startswith(f'{metric_key_prefix}_MRR')):
+        #         del metrics[key]
+
+        return EvalLoopOutput(predictions=(all_geo_preds, all_cat_preds, all_mask_preds), label_ids=(all_geo_labels, all_cat_labels, all_mask_labels), metrics=metrics, num_samples=num_samples)
+
+
+    def get_content_aware_layout_generation_eval_dataloader(self, eval_dataset: Optional[Union[str, Dataset]] = None) -> DataLoader:
+        if eval_dataset is None and self.eval_dataset is None:
+            raise ValueError("Trainer: evaluation requires an eval_dataset.")
+
+        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        if (
+            hasattr(self, "_eval_dataloaders")
+            and dataloader_key in self._eval_dataloaders
+        ):
+            return self.accelerator.prepare(self._eval_dataloaders[dataloader_key])
+
+        eval_dataset = (
+            self.eval_dataset[eval_dataset]
+            if isinstance(eval_dataset, str)
+            else eval_dataset
+            if eval_dataset is not None
+            else self.eval_dataset
+        )
+        data_collator = self.data_collator
+
+        dataloader_params = {
+            "batch_size": 1,
+            "collate_fn": data_collator,
+            "num_workers": self.args.dataloader_num_workers,
+            "pin_memory": self.args.dataloader_pin_memory,
+        }
+
+        if not isinstance(eval_dataset, torch.utils.data.IterableDataset):
+            dataloader_params["sampler"] = self._get_eval_sampler(eval_dataset)
+            dataloader_params["drop_last"] = self.args.dataloader_drop_last
+
+        eval_dataloader = DataLoader(eval_dataset, **dataloader_params)
+        return self.accelerator.prepare(eval_dataloader)
+    
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
         if self.train_dataset is None or not has_length(self.train_dataset):
             return None

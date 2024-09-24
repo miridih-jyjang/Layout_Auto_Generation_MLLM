@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
 
 
@@ -12,8 +12,7 @@ class CLIPVisionTower(nn.Module):
 
         self.vision_tower_name = vision_tower
         self.select_layer = args.mm_vision_select_layer
-        self.select_feature = getattr(args, 'mm_vision_select_feature', 'patch')
-
+        self.select_feature = getattr(args, 'mm_vision_select_feature', '_patch')
         if not delay_load:
             self.load_model()
         else:
@@ -31,7 +30,11 @@ class CLIPVisionTower(nn.Module):
         if self.select_feature == 'patch':
             image_features = image_features[:, 1:]
         elif self.select_feature == 'cls_patch':
-            image_features = image_features
+            image_features = image_features[:, 0].unsqueeze(1)
+        elif self.select_feature == '2d_avg_pool':
+            image_features1 = image_features[:, 0].unsqueeze(1)
+            image_features2 = F.adaptive_avg_pool2d(image_features[:, 1:], (4, image_features.shape[-1]))
+            image_features = torch.cat([image_features1, image_features2], dim=1)
         else:
             raise ValueError(f'Unexpected select feature: {self.select_feature}')
         return image_features
