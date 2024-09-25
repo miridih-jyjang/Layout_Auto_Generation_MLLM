@@ -25,6 +25,9 @@ from typing import List, Optional
 import gc
 from miridih_llava.mm_utils import KeywordsStoppingCriteria
 from transformers.deepspeed import deepspeed_init
+import transformers
+from miridih_llava.train.llama_flash_attn_monkey_patch import original_forward, original_prepare_mask, replace_llama_attn_with_flash_attn
+from tqdm import tqdm
 
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
@@ -209,34 +212,34 @@ class LLaVATrainer(Trainer):
         
         return geo_preds, cat_preds, mask_preds, geo_gts, cat_gts, mask_gts
 
-    # def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
-    #     if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
+        if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
 
-    #         logs: Dict[str, float] = {}
+            logs: Dict[str, float] = {}
 
-    #         tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
 
-    #         tr_loss -= tr_loss
+            tr_loss -= tr_loss
 
-    #         logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
-    #         logs["learning_rate"] = self._get_learning_rate()
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            logs["learning_rate"] = self._get_learning_rate()
 
-    #         self._total_loss_scalar += tr_loss_scalar
-    #         self._globalstep_last_logged = self.state.global_step
-    #         self.store_flos()
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
 
-    #         self.log(logs)
+            self.log(logs)
 
-    #     metrics = None
-    #     content_aware_layout_generation_metrics = None
-    #     if self.control.should_evaluate:
-    #         # metrics = self._evaluate(trial, ignore_keys_for_eval)
-    #         content_aware_layout_generation_metrics = self._content_aware_layout_generation_evaluate(trial, ignore_keys_for_eval)
+        metrics = None
+        content_aware_layout_generation_metrics = None
+        if self.control.should_evaluate:
+            # metrics = self._evaluate(trial, ignore_keys_for_eval)
+            content_aware_layout_generation_metrics = self._content_aware_layout_generation_evaluate(trial, ignore_keys_for_eval)
 
-    #     if self.control.should_save:
-    #         # self._save_checkpoint(model, trial, metrics=metrics)
-    #         self._save_checkpoint(model, trial, metrics=content_aware_layout_generation_metrics)
-    #         self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+        if self.control.should_save:
+            # self._save_checkpoint(model, trial, metrics=metrics)
+            self._save_checkpoint(model, trial, metrics=content_aware_layout_generation_metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def _content_aware_layout_generation_evaluate(self, trial, ignore_keys_for_eval, skip_scheduler=False):
         metrics = self.content_aware_layout_generation_evaluate(ignore_keys=ignore_keys_for_eval)
@@ -301,39 +304,31 @@ class LLaVATrainer(Trainer):
 
         return output.metrics
     
-    # def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
-    #     # Move inputs to the correct device
-    #     inputs = self._prepare_inputs(inputs)
+    def inference_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        # Move inputs to the correct device
+        inputs = self._prepare_inputs(inputs)
         
-    #     # For text generation, we usually don't calculate loss, so skip that part.
-    #     # We'll also ignore `prediction_loss_only` for now as we're focusing on generation.
+        # For text generation, we usually don't calculate loss, so skip that part.
+        # We'll also ignore `prediction_loss_only` for now as we're focusing on generation.
         
-    #     # Call model.generate instead of a forward pass
-    #     with torch.no_grad():
-    #         # generated_tokens = model.generate(
-    #         #     input_ids=inputs['input_ids'],
-    #         #     attention_mask=inputs['attention_mask'],
-    #         #     pixel_values=inputs['pixel_values'],
-    #         #     max_length=4096,  
-    #         #     num_beams=5,  
-    #         #     early_stopping=True
-    #         # )
-    #         stop_str = '</s>'
-    #         keywords = [stop_str]
-    #         # stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, inputs['input_ids'])
-    #         generated_tokens = model.generate(
-    #             inputs['input_ids'],
-    #             images=inputs['images'],
-    #             pixel_values=inputs['pixel_values'],
-    #             img_mask=inputs['img_mask'],
-    #             do_sample=True,
-    #             temperature=0.2,
-    #             max_new_tokens=4096,
-    #             use_cache=True,
-    #             # stopping_criteria=[stopping_criteria]
-    #         )
-
-    #     return None, generated_tokens, inputs['labels']
+        # Call model.generate instead of a forward pass
+        with torch.inference_mode():
+            stop_str = '</s>'
+            keywords = [stop_str]
+            stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, inputs['input_ids'])
+            generated_tokens = model.generate(
+                input_ids=inputs['input_ids'],
+                images=inputs['images'],
+                pixel_values=inputs['pixel_values'],
+                img_mask=inputs['img_mask'],
+                do_sample=True,
+                temperature=0.2,
+                max_new_tokens=4096,
+                use_cache=True,
+                stopping_criteria=[stopping_criteria]
+            )
+        
+        return None, generated_tokens, inputs['labels']
     
     def content_aware_layout_generation_evaluation_loop(
         self,
@@ -410,7 +405,13 @@ class LLaVATrainer(Trainer):
         
         self.gather_function = self.accelerator.gather_for_metrics
 
-        for step, inputs in enumerate(dataloader):
+        # Restore the original methods before prediction
+        transformers.models.llama.modeling_llama.LlamaAttention.forward = original_forward
+        transformers.models.llama.modeling_llama.LlamaModel._prepare_decoder_attention_mask = original_prepare_mask
+        
+
+        
+        for step, inputs in enumerate(tqdm(dataloader, desc="Processing evaluation")):
             observed_batch_size = find_batch_size(inputs)
             if observed_batch_size is not None:
                 observed_num_examples += observed_batch_size
@@ -419,7 +420,7 @@ class LLaVATrainer(Trainer):
             
             inputs = self._prepare_inputs(inputs)
             # inputs have 'input_ids', 'labels', 'attention_mask', 'pixel_values', 'img_mask', 'images'
-            losses, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            losses, logits, labels = self.inference_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
             
             main_input_name = getattr(self.model, "main_input_name", "input_ids")
             inputs_decode = self._prepare_input(inputs[main_input_name]) if args.include_inputs_for_metrics else None
@@ -452,7 +453,7 @@ class LLaVATrainer(Trainer):
                     all_geo_labels.add(geo_gts)
                     all_cat_labels.add(cat_gts)
                     all_mask_labels.add(mask_gts)
-            self.control = self.callback_handler.on_prediction_step(args, self.state, self.control)
+            # self.control = self.callback_handler.on_prediction_step(args, self.state, self.control)
             
             logits = (geo_preds, cat_preds, mask_preds)
             labels = (geo_gts, cat_gts, mask_gts)

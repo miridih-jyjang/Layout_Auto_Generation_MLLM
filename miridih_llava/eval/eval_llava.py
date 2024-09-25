@@ -161,10 +161,7 @@ def __compute_maximum_iou_for_layout(layout_1: Layout, layout_2: Layout) -> floa
         iou[np.isnan(iou)] = 1e-6
         ii, jj = linear_sum_assignment(iou, maximize=True)
         score += iou[ii, jj].sum().item()
-    if N > 0:
-        return score / N
-    else:
-        return 0
+    return score / N
 
 def preprocess_layouts(layouts, types):
     processed_layouts = []
@@ -222,17 +219,32 @@ class Evaluator:
 
         return calculate_frechet_distance(real_mu, real_sigma, fake_mu, fake_sigma)
 
+    def denormalize_boundary(self, normalized_geometry):
+        norm_x1, norm_y1, norm_x2, norm_y2 = normalized_geometry[:, 0], normalized_geometry[:, 1], normalized_geometry[:, 2], normalized_geometry[:, 3]
+        
+        # Renormalize coordinates from [0, 1] to [-1, 1]
+        norm_x1 = 2 * norm_x1 - 1
+        norm_y1 = 2 * norm_y1 - 1
+        norm_x2 = 2 * norm_x2 - 1
+        norm_y2 = 2 * norm_y2 - 1
+        
+        denormalized_geo = torch.stack([norm_x1, norm_y1, norm_x2, norm_y2], dim=-1)
+        
+        return denormalized_geo
+    
     def get_fid_score(self, pred_geometry, gt_geometry, pred_category, gt_category, mask):
         gt_feats, pd_feats = [], []
 
         for stack_pd_geometry, stack_gt_geometry, stack_pred_category, stack_gt_category, stack_mask in zip(pred_geometry, gt_geometry, pred_category, gt_category, mask):
             for pd_geo, gt_geo, pred_cat, gt_cat, mask_ in zip(stack_pd_geometry[:,:,:-1], stack_gt_geometry[:,:,:-1], stack_pred_category, stack_gt_category, stack_mask):
                 
+                pd_geo = self.denormalize_boundary(pd_geo)
+                gt_geo = self.denormalize_boundary(gt_geo)
                 pd_geo = pd_geo.float()
                 gt_geo = gt_geo.float()
                 pred_cat = pred_cat.float()
                 gt_cat = gt_cat.float()
-                mask_ = mask_.float()
+                mask_ = mask_.bool()
 
                 selected_gt_geometry = torch.masked_select(gt_geo, mask_[:, :-1])
                 selected_pd_geometry = torch.masked_select(pd_geo, mask_[:, :-1])
@@ -284,8 +296,16 @@ class Evaluator:
 
         return total_accuracy / total_cnt
     
-    def xyxy2xywh(self, normalized_geometry):
+    def denormalize(self, normalized_geometry):
         norm_x1, norm_y1, norm_x2, norm_y2 = normalized_geometry[:, :, 0], normalized_geometry[:, :, 1], normalized_geometry[:, :, 2], normalized_geometry[:, :, 3]
+        
+        # Renormalize coordinates from [0, 1] to [-1, 1]
+        norm_x1 = 2 * norm_x1 - 1
+        norm_y1 = 2 * norm_y1 - 1
+        norm_x2 = 2 * norm_x2 - 1
+        norm_y2 = 2 * norm_y2 - 1
+        
+        # Calculate width, height, and center coordinates
         w = norm_x2 - norm_x1
         h = norm_y2 - norm_y1
         x = norm_x1 + w/2
@@ -317,8 +337,8 @@ class Evaluator:
                 input_gt_class = selected_gt_cat.unsqueeze(0)
                 input_pd_class = selected_pd_cat.unsqueeze(0)
 
-                denorm_gt_geometry = self.xyxy2xywh(input_gt_geometry)
-                denorm_pd_geometry = self.xyxy2xywh(input_pd_geometry)
+                denorm_gt_geometry = self.denormalize(input_gt_geometry)
+                denorm_pd_geometry = self.denormalize(input_pd_geometry)
 
                 max_iou = maximum_iou_one_by_one(denorm_gt_geometry.detach(), denorm_pd_geometry.detach(), input_gt_class.detach(), input_pd_class.detach())
                 mean_iou = mean_iou_one_by_one(denorm_gt_geometry.detach(), denorm_pd_geometry.detach(), input_gt_class.detach(), input_pd_class.detach())
