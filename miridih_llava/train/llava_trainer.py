@@ -1,5 +1,6 @@
 import os, re
 import torch
+import torch.nn.functional as F
 import time
 from torch.utils.data import Sampler
 from torch import nn
@@ -25,6 +26,7 @@ from typing import List, Optional
 import gc
 from miridih_llava.mm_utils import KeywordsStoppingCriteria
 from transformers.deepspeed import deepspeed_init
+import deepspeed
 import transformers
 from miridih_llava.train.llama_flash_attn_monkey_patch import original_forward, original_prepare_mask, replace_llama_attn_with_flash_attn
 from tqdm import tqdm
@@ -143,6 +145,11 @@ class LengthGroupedSampler(Sampler):
             indices = get_length_grouped_indices(self.lengths, self.batch_size, self.world_size, generator=self.generator)
         return iter(indices)
 
+bbox_extract =     re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)'")
+bbox_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'file_name':\s*'([^']*)'")
+bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+
 
 class LLaVATrainer(Trainer):
     def __init__(self, *args, **kwargs):
@@ -161,8 +168,32 @@ class LLaVATrainer(Trainer):
     def _preprocess_logits_for_metrics(self, logits, labels):
         ## detokenizer the logits to predictions
         geo_preds, cat_preds, mask_preds, geo_gts, cat_gts, mask_gts = [], [], [], [], [], []
-        outputs = self.tokenizer.batch_decode(logits[:, labels[labels==IGNORE_INDEX].shape[0]:])
-        gts_string = self.tokenizer.batch_decode(labels[:, labels[labels==IGNORE_INDEX].shape[0]:])
+        # assert(logits)
+        answer_start_idx = torch.nonzero(labels[0]!=IGNORE_INDEX)
+        valid_logits = logits[answer_start_idx[0], answer_start_idx[1]+1:] # <\s>
+        try:
+            assert(valid_logits[0][0] == 1) # bos
+        except:
+            print("[ERROR] valid_logits[0][0]: ", valid_logits[0][0])
+        # valid_logits = logits[:, labels[labels==IGNORE_INDEX].shape[0]:]
+        try:
+            eos_idx = torch.nonzero(valid_logits==self.tokenizer.eos_token_id)
+        except:
+            eos_idx = [0, len(valid_logits[0])-1]
+        padded_logits = valid_logits[0][:eos_idx[1]+1]
+        
+        # if not stopped properly: eos token is more than two / eos token is not in the last position
+        # if len(torch.nonzero(logits == self.tokenizer.eos_token_id)) > 1 or labels[labels==IGNORE_INDEX].shape[0] == 0:
+        #     valid_logits = logits[:, labels[labels==IGNORE_INDEX].shape[0]:]
+        #     first_idx = torch.nonzero((valid_logits==self.tokenizer.eos_token_id))[0]
+        #     padded_logits = valid_logits[0][:first_idx[1]+1]
+        # else:
+        #     padded_logits = logits[:, labels[labels==IGNORE_INDEX].shape[0]:].squeeze(0)
+            
+        output = self.tokenizer.decode(padded_logits).strip()
+        gt = self.tokenizer.decode(labels[:, answer_start_idx+1:eos_idx[1]+1].squeeze(0)).strip()
+        print("output: ", output)
+        print("gt: ", gt)
         def stringToTensor_v6(s):
             def clean_float_string(s):
                 # Step 1: Remove leading/trailing whitespace
@@ -183,7 +214,10 @@ class LLaVATrainer(Trainer):
             mask = [[False, False, False, False, False]] * MAX_ELE_NUM_CRELLO
             # torch.nn.utils.rnn.pad_sequence
             for idx, rect in enumerate(rects):
-                geo[idx] = [float(clean_float_string(r)) for r in rect[1].split(',')] + [int(rect[2])]
+                try:
+                    geo[idx] = [float(clean_float_string(r)) for r in rect[1].split(',')] + [int(rect[2])]
+                except:
+                    print("s: {}\trects: {}".format(s, rects))
                 cat[idx] = CONVERTED_DATASET_META[self.dataset_name][rect[0]]
             mask[:len(rects)] = [[True, True, True, True, True]] * len(rects)
             
@@ -193,15 +227,15 @@ class LLaVATrainer(Trainer):
             
             return geo, cat, mask
         
-        for output, gt in zip(outputs, gts_string):
-            geo_pred, cat_pred, mask_pred = stringToTensor_v6(output)
-            geo_preds.append(geo_pred)
-            cat_preds.append(cat_pred)
-            mask_preds.append(mask_pred)
-            geo_gt, cat_gt, mask_gt = stringToTensor_v6(gt)
-            geo_gts.append(geo_gt)
-            cat_gts.append(cat_gt)
-            mask_gts.append(mask_gt)
+        # for output, gt in zip(outputs, gts_string):
+        geo_pred, cat_pred, mask_pred = stringToTensor_v6(output)
+        geo_preds.append(geo_pred)
+        cat_preds.append(cat_pred)
+        mask_preds.append(mask_pred)
+        geo_gt, cat_gt, mask_gt = stringToTensor_v6(gt)
+        geo_gts.append(geo_gt)
+        cat_gts.append(cat_gt)
+        mask_gts.append(mask_gt)
 
         geo_preds = torch.stack(geo_preds)
         cat_preds = torch.stack(cat_preds)
@@ -233,12 +267,16 @@ class LLaVATrainer(Trainer):
         metrics = None
         content_aware_layout_generation_metrics = None
         if self.control.should_evaluate:
-            # metrics = self._evaluate(trial, ignore_keys_for_eval)
-            content_aware_layout_generation_metrics = self._content_aware_layout_generation_evaluate(trial, ignore_keys_for_eval)
-
+            metrics = self.evaluate(trial, ignore_keys_for_eval)
+            # try:
+            # content_aware_layout_generation_metrics = self._content_aware_layout_generation_evaluate(trial, ignore_keys_for_eval)
+            # self.log(content_aware_layout_generation_metrics)
+            # except:
+            #     print("[WARNING] custom evaluation not working")
+            
         if self.control.should_save:
-            # self._save_checkpoint(model, trial, metrics=metrics)
-            self._save_checkpoint(model, trial, metrics=content_aware_layout_generation_metrics)
+            self._save_checkpoint(model, trial, metrics=metrics)
+            # self._save_checkpoint(model, trial, metrics=content_aware_layout_generation_metrics)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def _content_aware_layout_generation_evaluate(self, trial, ignore_keys_for_eval, skip_scheduler=False):
@@ -296,15 +334,13 @@ class LLaVATrainer(Trainer):
         if f"{metric_key_prefix}_model_preparation_time" in output.metrics:
             start_time += output.metrics[f"{metric_key_prefix}_model_preparation_time"]
 
-        self.log(output.metrics)
-
         self.control = self.callback_handler.on_evaluate(self.args, self.state, self.control, output.metrics)
 
         self._memory_tracker.stop_and_update_metrics(output.metrics)
 
         return output.metrics
     
-    def inference_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+    def inference_step(self, model, inputs, prediction_loss_only, eval_only, ignore_keys=None):
         # Move inputs to the correct device
         inputs = self._prepare_inputs(inputs)
         
@@ -312,22 +348,50 @@ class LLaVATrainer(Trainer):
         # We'll also ignore `prediction_loss_only` for now as we're focusing on generation.
         
         # Call model.generate instead of a forward pass
-        with torch.inference_mode():
-            stop_str = '</s>'
-            keywords = [stop_str]
-            stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, inputs['input_ids'])
-            generated_tokens = model.generate(
-                input_ids=inputs['input_ids'],
-                images=inputs['images'],
-                pixel_values=inputs['pixel_values'],
-                img_mask=inputs['img_mask'],
-                do_sample=True,
-                temperature=0.2,
-                max_new_tokens=4096,
-                use_cache=True,
-                stopping_criteria=[stopping_criteria]
-            )
+        answer_start_idx = torch.nonzero(inputs['labels']!=IGNORE_INDEX)[0] # first index's 2nd dim which is seq_idx
         
+        inputs['input_ids'] = inputs['input_ids'][:, :answer_start_idx[1]] 
+        # inputs['input_ids'][0][-1] = self.tokenizer.eos_token_id
+        # try:
+        #     assert(inputs['input_ids'][0][-1] == 2) # 2 = eos
+        # except:
+        #     print("[ERROR] inputs['input_ids'][0][-1]: ", inputs['input_ids'][0][-1])
+            
+        # print("input: ", self.tokenizer.decode(inputs['input_ids'][0]).strip())
+
+        if eval_only:
+            with torch.inference_mode():
+                stop_str = '</s>'
+                keywords = [stop_str]
+                stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, inputs['input_ids'])
+                generated_tokens = model.generate(
+                    input_ids=inputs['input_ids'],
+                    images=inputs['images'],
+                    pixel_values=inputs['pixel_values'],
+                    img_mask=inputs['img_mask'],
+                    do_sample=True,
+                    temperature=0.2,
+                    max_new_tokens=4096,
+                    use_cache=True,
+                    stopping_criteria=[stopping_criteria]
+                )
+        else:
+            with torch.no_grad():
+                stop_str = '</s>'
+                keywords = [stop_str]
+                stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, inputs['input_ids'])
+                generated_tokens = model.generate(
+                    input_ids=inputs['input_ids'],
+                    images=inputs['images'],
+                    pixel_values=inputs['pixel_values'],
+                    img_mask=inputs['img_mask'],
+                    do_sample=True,
+                    temperature=0.2,
+                    max_new_tokens=4096,
+                    use_cache=True,
+                    stopping_criteria=[stopping_criteria]
+                )
+
         return None, generated_tokens, inputs['labels']
     
     def content_aware_layout_generation_evaluation_loop(
@@ -340,11 +404,26 @@ class LLaVATrainer(Trainer):
     ) -> EvalLoopOutput:
         args = self.args
         
-        prediction_loss_only = prediction_loss_only if prediction_loss_only is not None else args.prediction_loss_only
+        if self.deepspeed == None:
+            eval_only = True
+        else:
+            eval_only = False
+            
+        # ori_ds_enabled, ori_ds = self.is_deepspeed_enabled, self.deepspeed
+        # self.is_deepspeed_enabled, self.deepspeed = False, None
 
+        prediction_loss_only = prediction_loss_only if prediction_loss_only is not None else args.prediction_loss_only
         if self.is_deepspeed_enabled and self.deepspeed is None:
             _, _ = deepspeed_init(self, num_training_steps=0, inference=True)
-
+        # init deepspeed inference engine
+        # model = deepspeed.init_inference(
+        #     model=self.model,      # Transformers models
+        #     mp_size=1,        # Number of GPU
+        #     dtype=torch.float16, # dtype of the weights (fp16)
+        #     # replace_method="auto", # Lets DS autmatically identify the layer to replace
+        #     # replace_with_kernel_inject=True, # replace the model with the kernel injector
+        # )
+                
         model = self._wrap_model(self.model, training=False, dataloader=dataloader)
 
         if len(self.accelerator._models) == 0 and model is self.model:
@@ -364,7 +443,7 @@ class LLaVATrainer(Trainer):
 
             if self.is_deepspeed_enabled:
                 self.deepspeed = self.model_wrapped
-
+        
         if not self.is_in_train:
             if args.fp16_full_eval:
                 model = model.to(dtype=torch.float16, device=args.device)
@@ -409,19 +488,30 @@ class LLaVATrainer(Trainer):
         transformers.models.llama.modeling_llama.LlamaAttention.forward = original_forward
         transformers.models.llama.modeling_llama.LlamaModel._prepare_decoder_attention_mask = original_prepare_mask
         
-
+        num_tasks = 6
         
         for step, inputs in enumerate(tqdm(dataloader, desc="Processing evaluation")):
+            if (step+1) % num_tasks != 0 and not eval_only:
+                continue
+            
+            if step > 30:
+                break
+            
             observed_batch_size = find_batch_size(inputs)
             if observed_batch_size is not None:
                 observed_num_examples += observed_batch_size
                 if batch_size is None:
                     batch_size = observed_batch_size
-            
+                
             inputs = self._prepare_inputs(inputs)
             # inputs have 'input_ids', 'labels', 'attention_mask', 'pixel_values', 'img_mask', 'images'
-            losses, logits, labels = self.inference_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            losses, logits, labels = self.inference_step(model, inputs, prediction_loss_only, eval_only, ignore_keys=ignore_keys)
             
+            # pad_length = self.args.model_max_length - logits.size(1)
+            # logits = F.pad(logits, (0, pad_length), value=self.tokenizer.pad_token_id)
+            # labels = F.pad(labels, (0, pad_length), value=IGNORE_INDEX)
+
+
             main_input_name = getattr(self.model, "main_input_name", "input_ids")
             inputs_decode = self._prepare_input(inputs[main_input_name]) if args.include_inputs_for_metrics else None
 
@@ -438,7 +528,11 @@ class LLaVATrainer(Trainer):
             if logits is not None:
                 logits = self.accelerator.pad_across_processes(logits, dim=1, pad_index=-100)
                 if self._preprocess_logits_for_metrics is not None:
-                    geo_preds, cat_preds, mask_preds, geo_gts, cat_gts, mask_gts = self._preprocess_logits_for_metrics(logits, labels)
+                    try:
+                        geo_preds, cat_preds, mask_preds, geo_gts, cat_gts, mask_gts = self._preprocess_logits_for_metrics(logits, labels)
+                    except:
+                        print("exception at {} step since there were no valid eos token for logits".format(step))
+                        continue
                 geo_preds = self.gather_function((geo_preds))
                 cat_preds = self.gather_function((cat_preds))
                 mask_preds = self.gather_function((mask_preds))
@@ -487,6 +581,9 @@ class LLaVATrainer(Trainer):
                 del losses, logits, labels, inputs
                 torch.cuda.empty_cache()
         
+         # Restor back to flash attention during training
+        replace_llama_attn_with_flash_attn()
+        
         if args.past_index and hasattr(self, "_past"):
             delattr(self, "_past")
 
@@ -531,19 +628,72 @@ class LLaVATrainer(Trainer):
         #     if not (key.startswith(f'{metric_key_prefix}_Recall') or key.startswith(f'{metric_key_prefix}_MRR')):
         #         del metrics[key]
 
+        # revert back to detraining mode
+        # self.is_deepspeed_enabled, self.deepspeed = ori_ds_enabled, ori_ds
         return EvalLoopOutput(predictions=(all_geo_preds, all_cat_preds, all_mask_preds), label_ids=(all_geo_labels, all_cat_labels, all_mask_labels), metrics=metrics, num_samples=num_samples)
 
+    def extract_elements(self, bbox_html):
+        if 'src' in bbox_html:
+            if 'layer' in bbox_html:
+                matches = bbox_src_layer_extract.findall(bbox_html)
+            else:
+                matches = bbox_src_extract.findall(bbox_html)
+        else:
+            if 'layer' in bbox_html:
+                matches = bbox_layer_extract.findall(bbox_html)
+            else:
+                matches = bbox_extract.findall(bbox_html)
+        
+        # Find and return invalid elements
+        invalid_elements, valid_elements = [], []
+        for match in matches:
+            if 'layer' in bbox_html:
+                box = match[1].split(',')
+                category = match[0]
+                x1 = float(box[0])
+                y1 = float(box[1])
+                x2 = float(box[2])
+                y2 = float(box[3])
+                layer = match[2]
+                file_name = match[3]
+                if len(match) == 5:
+                    src = match[4]
+            else:
+                box = match[1].split(',')
+                category = match[0]
+                x1 = float(box[0])
+                y1 = float(box[1])
+                x2 = float(box[2])
+                y2 = float(box[3])
+                file_name = match[2]
+                if len(match) == 4:
+                    src = match[3]
 
+            temp_dict = {
+                "file_name": file_name,
+                "label": category,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+            }
+            if 'layer' in bbox_html:
+                temp_dict["layer"] = layer
+            if 'src' in bbox_html:
+                temp_dict["src"] = src
+            valid_elements.append(temp_dict)
+
+        return valid_elements
     def get_content_aware_layout_generation_eval_dataloader(self, eval_dataset: Optional[Union[str, Dataset]] = None) -> DataLoader:
         if eval_dataset is None and self.eval_dataset is None:
             raise ValueError("Trainer: evaluation requires an eval_dataset.")
 
-        dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
-        if (
-            hasattr(self, "_eval_dataloaders")
-            and dataloader_key in self._eval_dataloaders
-        ):
-            return self.accelerator.prepare(self._eval_dataloaders[dataloader_key])
+        # dataloader_key = eval_dataset if isinstance(eval_dataset, str) else "eval"
+        # if (
+        #     hasattr(self, "_eval_dataloaders")
+        #     and dataloader_key in self._eval_dataloaders
+        # ):
+        #     return self.accelerator.prepare(self._eval_dataloaders[dataloader_key])
 
         eval_dataset = (
             self.eval_dataset[eval_dataset]
@@ -567,6 +717,7 @@ class LLaVATrainer(Trainer):
 
         eval_dataloader = DataLoader(eval_dataset, **dataloader_params)
         return self.accelerator.prepare(eval_dataloader)
+        # return eval_dataloader
     
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
         if self.train_dataset is None or not has_length(self.train_dataset):
@@ -717,8 +868,10 @@ class LLaVATrainer(Trainer):
         Return:
             `torch.Tensor`: The tensor with training loss on this batch.
         """
+        # print("**** [3] Training Step ****")
         model.train()
         inputs = self._prepare_inputs(inputs)
+        # print("images: {}\timg_mask: {}\tpixel_values: {}\tattention_mask: {}\tlabels: {}\tinput_ids: {}".format(inputs['images'].shape, inputs['img_mask'].shape, inputs['pixel_values'].shape, inputs['attention_mask'].shape, inputs['labels'].shape, inputs['input_ids'].shape))
 
         if is_sagemaker_mp_enabled():
             loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
@@ -746,5 +899,38 @@ class LLaVATrainer(Trainer):
 
         return loss.detach() / self.args.gradient_accumulation_steps
 
-       
     
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+
+        Subclass and override for custom behavior.
+        """
+        # print("**** [4] Compute Loss ****")
+        # print("images: {}\timg_mask: {}\tpixel_values: {}\tattention_mask: {}\tlabels: {}\tinput_ids: {}".format(inputs['images'].shape, inputs['img_mask'].shape, inputs['pixel_values'].shape, inputs['attention_mask'].shape, inputs['labels'].shape, inputs['input_ids'].shape))
+        
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+        outputs = model(**inputs)
+        # Save past state if it exists
+        # TODO: this needs to be fixed and made cleaner later.
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+        
+        if labels is not None:
+            if unwrap_model(model)._get_name() in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+                loss = self.label_smoother(outputs, labels, shift_labels=True)
+            else:
+                loss = self.label_smoother(outputs, labels)
+        else:
+            if isinstance(outputs, dict) and "loss" not in outputs:
+                raise ValueError(
+                    "The model did not return a loss from the inputs, only the following keys: "
+                    f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
+                )
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        return (loss, outputs) if return_outputs else loss

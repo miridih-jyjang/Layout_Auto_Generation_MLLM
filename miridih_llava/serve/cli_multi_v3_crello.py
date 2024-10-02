@@ -495,5 +495,5 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--image-out", action="store_true")
     args = parser.parse_args()
-    setproctitle('MIRIDIH-JJY')
+    setproctitle('jooyoung-jang')
     main(args)

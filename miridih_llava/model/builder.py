@@ -104,7 +104,9 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
                 # model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
-                if "v6" in model_path:
+                if "v6.4" in model_path or 'v6.5' in model_path:
+                    model = LlavaLlamaForCausalLM_v6_4.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
+                elif "v6" in model_path or "v5" in model_path:
                     model = LlavaLlamaForCausalLM_v5.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
                 else:
                     model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)

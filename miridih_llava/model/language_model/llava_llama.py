@@ -74,7 +74,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         input_ids, attention_mask, past_key_values, inputs_embeds, labels = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images)
-
+        
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -141,6 +141,8 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
     
     def prepare_inputs_labels_for_multimodal(
         self, input_ids, attention_mask, past_key_values, labels, images, ele_images, img_mask):
+
+
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[1] == 1:
@@ -154,7 +156,7 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
             image_features = torch.split(image_features, split_sizes, dim=0)
             image_features = [x.flatten(0, 1) for x in image_features]
         else:
-            self.model.vision_tower.select_feature = 'cls_patch'
+            self.model.vision_tower.select_feature = 'patch'
             image_features = self.encode_images(images)
             del images
         
@@ -185,16 +187,7 @@ class LlavaLlamaForCausalLM_v5(LlavaLlamaForCausalLM):
         else:
             # ele_image_features = self.encode_images(ele_images)
             ele_image_features = torch.empty(0).to(ele_images.device)
-
-        # # if ele_images.shape[0] > 0:
-        # #     # self.model.vision_tower.select_feature = 'cls_patch'
-        # #     ele_image_features = self.encode_images(ele_images) # sum(N), 1, 4096
-        # #     img_count = num_imgs.cumsum(0)
-        # # else:
-        # #     ele_image_features = torch.empty(0).to(ele_images.device)
-        # del ele_images
-        # merge skin image features with element image features
-
+            
         new_input_embeds = []
         new_labels = [] if labels is not None else None
         for batch_idx, cur_input_ids in enumerate(input_ids):
@@ -416,6 +409,7 @@ class LlavaLlamaForCausalLM_v6_4(LlavaLlamaForCausalLM_v5):
     
     def prepare_inputs_labels_for_multimodal(
         self, input_ids, attention_mask, past_key_values, labels, images, ele_images, img_mask):
+        max_token_length = input_ids.shape[1]
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[1] == 1:
@@ -429,15 +423,14 @@ class LlavaLlamaForCausalLM_v6_4(LlavaLlamaForCausalLM_v5):
             image_features = torch.split(image_features, split_sizes, dim=0)
             image_features = [x.flatten(0, 1) for x in image_features]
         else:
-            self.model.vision_tower.select_feature = 'cls_patch'
-            image_features = self.encode_images(images)
+            self.model.vision_tower.select_feature = 'patch'
+            image_features = self.encode_images(images) # batch, pad_dim, feat_dim ex. 16, 576, 4096
             img_count = img_mask.sum(1).cumsum(0)
             del images
         
-        ele_images = ele_images[img_mask] # [N_1+N_2+..+N_B] x 3, 336, 336
         if len(ele_images) > 0:
             ele_image_features = self.encode_features(ele_images) # [N_1+N_2+..+N_B], image_feature_dim, 4096 
-
+        ele_image_features = ele_image_features[img_mask] # [N_1+N_2+..+N_B], image_feature_dim, 4096 
         new_input_embeds = []
         new_labels = [] if labels is not None else None
         for batch_idx, cur_input_ids in enumerate(input_ids):
@@ -464,72 +457,44 @@ class LlavaLlamaForCausalLM_v6_4(LlavaLlamaForCausalLM_v5):
                 cur_labels = labels[batch_idx]
                 cur_new_labels = []
                 assert cur_labels.shape == cur_input_ids.shape
-            while image_token_indices.numel() > 0:
-                if cur_image_idx == 0:
-                    cur_image_features = image_features[batch_idx]
-                else:
-                    try:
-                        if batch_idx == 0:
-                            cur_image_features = ele_image_features[:img_count[batch_idx]][cur_image_idx-1]
-                        else:
-                            cur_image_features = ele_image_features[img_count[batch_idx-1]:img_count[batch_idx]+1][cur_image_idx-1]
-                    except:
-                        print("img_count: {}\toriginal_num_image_token_indices: {}\nbatch_idx: {}\tcur_image_idx: {}\tele_image_features: {}".format(img_count, original_num_image_token_indices, batch_idx, cur_image_idx, ele_image_features.shape[0]))
-                    
-                image_token_start = image_token_indices[0]
-                if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
-                    cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[:image_token_start-1]).detach())
-                    cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[image_token_start-1:image_token_start]))
-                    cur_new_input_embeds.append(cur_image_features)
-                    cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[image_token_start+1:image_token_start+2]))
-                    if labels is not None:
-                        cur_new_labels.append(cur_labels[:image_token_start])
-                        cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=labels.device, dtype=labels.dtype))
-                        cur_new_labels.append(cur_labels[image_token_start:image_token_start+1])
-                        cur_labels = cur_labels[image_token_start+2:]
-                else:
-                    cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[:image_token_start]))
-                    cur_new_input_embeds.append(cur_image_features)
-                    if labels is not None:
-                        cur_new_labels.append(cur_labels[:image_token_start])
-                        cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=labels.device, dtype=labels.dtype))
-                        cur_labels = cur_labels[image_token_start+1:]
-                cur_image_idx += 1
-                if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
-                    cur_input_ids = cur_input_ids[image_token_start+2:]
-                else:
-                    cur_input_ids = cur_input_ids[image_token_start+1:]
-                image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0]
-            if cur_input_ids.numel() > 0:
-                if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
-                    cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids).detach())
-                else:
-                    cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids))
-                if labels is not None:
-                    cur_new_labels.append(cur_labels)
-            cur_new_input_embeds = [x.to(device=self.device) for x in cur_new_input_embeds]
-            cur_new_input_embeds = torch.cat(cur_new_input_embeds, dim=0)
-            new_input_embeds.append(cur_new_input_embeds)
-            if labels is not None:
+            # print("cur_input_ids: {}\tbatch_idx: {}\timg_mask[batch_idx]: {}\tIMAGE_TOKEN_INDEX: {}".format(cur_input_ids.shape, batch_idx, img_mask[batch_idx].sum(), (cur_input_ids == IMAGE_TOKEN_INDEX).sum()))
+            
+            cur_input_ids[image_token_indices] = 0.0
+            
+            # print("cur_new_input_embeds: ", cur_new_input_embeds.shape)
+            
+            image_token_start = image_token_indices[0]
+            if labels != None:
+                labels[batch_idx][image_token_indices] = IGNORE_INDEX
+                cur_new_labels.append(labels[batch_idx][:image_token_start])
+                cur_new_labels.append(torch.full((image_features[batch_idx].shape[0],), IGNORE_INDEX, device=labels.device, dtype=labels.dtype))
+                cur_new_labels.append(labels[batch_idx][image_token_start+1:])
                 cur_new_labels = torch.cat(cur_new_labels, dim=0)
                 new_labels.append(cur_new_labels)
+                
+            cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[:image_token_start]).detach())
+            cur_new_input_embeds.append(image_features[batch_idx].squeeze(0))
+            cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[image_token_start+1:]).detach())
+            cur_new_input_embeds = torch.cat(cur_new_input_embeds, dim=0)
+            # cur_new_input_embeds[image_token_indices[0]] = image_features[batch_idx].squeeze(0)
+            # cur_new_labels[image_token_indices] = IGNORE_INDEX
+            new_input_embeds.append(cur_new_input_embeds)
+            
+            
+            if batch_idx == 0:
+                image_token_indices[1:] = image_token_indices[1:] + (image_features[batch_idx].shape[0] - 1)
+                cur_new_input_embeds[image_token_indices[1:]] = ele_image_features[:len(image_token_indices[1:])].squeeze(1).to(cur_new_input_embeds.dtype)
+            else:
+                cur_new_input_embeds[image_token_indices[1:]] = ele_image_features[img_count[batch_idx-1]:img_count[batch_idx-1]+len(image_token_indices[1:])].squeeze(1).to(cur_new_input_embeds.dtype)
+            
+        
+        new_input_embeds = torch.stack(new_input_embeds, dim=0)
+        if labels != None:
+            new_labels = torch.stack(new_labels, dim=0)
+        else:
+            new_labels = labels
         
         if any(x.shape != new_input_embeds[0].shape for x in new_input_embeds):
-            max_len = max(x.shape[0] for x in new_input_embeds)
-
-            new_input_embeds_align = []
-            for cur_new_embed in new_input_embeds:
-                cur_new_embed = torch.cat((cur_new_embed, torch.zeros((max_len - cur_new_embed.shape[0], cur_new_embed.shape[1]), dtype=cur_new_embed.dtype, device=cur_new_embed.device)), dim=0)
-                new_input_embeds_align.append(cur_new_embed)
-            new_input_embeds = torch.stack(new_input_embeds_align, dim=0)
-
-            if labels is not None:
-                new_labels_align = []
-                _new_labels = new_labels
-                for cur_new_label in new_labels:
-                    cur_new_label = torch.cat((cur_new_label, torch.full((max_len - cur_new_label.shape[0],), IGNORE_INDEX, dtype=cur_new_label.dtype, device=cur_new_label.device)), dim=0)
-                    new_labels_align.append(cur_new_label)
-                new_labels = torch.stack(new_labels_align, dim=0)
 
             if attention_mask is not None:
                 new_attention_mask = []
@@ -541,15 +506,17 @@ class LlavaLlamaForCausalLM_v6_4(LlavaLlamaForCausalLM_v5):
                 attention_mask = torch.stack(new_attention_mask, dim=0)
                 assert attention_mask.shape == new_labels.shape
         else:
-            new_input_embeds = torch.stack(new_input_embeds, dim=0)
-            if labels is not None:
-                new_labels  = torch.stack(new_labels, dim=0)
 
             if attention_mask is not None:
                 new_attn_mask_pad_left = torch.full((attention_mask.shape[0], new_input_embeds.shape[1] - input_ids.shape[1]), True, dtype=attention_mask.dtype, device=attention_mask.device)
                 attention_mask = torch.cat((new_attn_mask_pad_left, attention_mask), dim=1)
                 assert attention_mask.shape == new_input_embeds.shape[:2]
 
+        new_input_embeds = new_input_embeds[:, :max_token_length, :]
+        if labels != None:
+            new_labels = new_labels[:, :max_token_length]
+        attention_mask = attention_mask[:, :max_token_length]
+        
         return None, attention_mask, past_key_values, new_input_embeds, new_labels
     
 AutoConfig.register("miridih_llava", LlavaConfig)

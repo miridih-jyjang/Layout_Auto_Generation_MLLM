@@ -13,5 +13,5 @@ replace_llama_attn_with_flash_attn()
 
 from miridih_llava.eval.eval_llava import eval
 if __name__ == "__main__":
-    setproctitle('MIRIDIH-JJY')
+    setproctitle('jooyoung-jang')
     eval()

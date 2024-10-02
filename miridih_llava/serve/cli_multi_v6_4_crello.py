@@ -224,34 +224,19 @@ def extract_elements(bbox_html):
                 if len(match) == 4:
                     src = match[3]
 
-            if x1 < 0 or y1 < 0 or x2 > 1 or y2 > 1:
-                temp_dict = {
-                    "file_name": file_name,
-                    "label": category,
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                }
-                if 'layer' in bbox_html:
-                    temp_dict["layer"] = layer
-                if 'src' in bbox_html:
-                    temp_dict["src"] = src
-                invalid_elements.append(temp_dict)
-            else:
-                temp_dict = {
-                    "file_name": file_name,
-                    "label": category,
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                }
-                if 'layer' in bbox_html:
-                    temp_dict["layer"] = layer
-                if 'src' in bbox_html:
-                    temp_dict["src"] = src
-                valid_elements.append(temp_dict)
+            temp_dict = {
+                "file_name": file_name,
+                "label": category,
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+            }
+            if 'layer' in bbox_html:
+                temp_dict["layer"] = layer
+            if 'src' in bbox_html:
+                temp_dict["src"] = src
+            valid_elements.append(temp_dict)
 
         return invalid_elements, valid_elements
     
@@ -435,7 +420,9 @@ def main(args):
 
     model_name = get_model_name_from_path(args.model_path)
     tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name)
-
+    with open(args.ele_cache_path, 'r') as f:
+        ele_cache = json.load(f)
+    
     if 'llama-2' in model_name.lower():
         conv_mode = "llava_llama_2"
     elif "v1" in model_name.lower():
@@ -474,17 +461,13 @@ def main(args):
         invalid_filenames, valid_filenames = extract_elements(entry['conversations'][1]['value'])
         pixel_values = []
         for element in valid_filenames:
-            element = element['file_name']
-            ele_file_path = os.path.join(args.data_path,'crello-v6', element)
-            ele_img = Image.open(ele_file_path).convert('RGB')
-            pixel_values.append(ele_img)   
+            ele_file = os.path.basename(element['file_name'])
+            pixel_values.append(ele_cache[ele_file]) 
         try:
-            ele_img_tensor = process_images(pixel_values, image_processor, args)
-            img_mask = torch.ones(ele_img_tensor.shape[0]).bool().to(model.device)
+            img_mask = torch.ones(len(pixel_values)).bool().to(model.device)
         except:
             print("Empty element images in ", entry['id'])
             continue        
-        ele_img_tensor = ele_img_tensor.to(model.device, dtype=torch.float16)
         merged_filelist = merge_lists_without_overlap(extract_unmasked_elements(entry['conversations'][0]['value']), invalid_filenames)
 
         if "mpt" in model_name.lower():
@@ -546,11 +529,14 @@ def main(args):
         keywords = [stop_str]
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
+        ele_img_tensors = torch.tensor(pixel_values).to(image_tensor.device)
+        ele_img_tensors = ele_img_tensors.to(torch.float16)  # Converts to float16 (half precision)
+
         with torch.inference_mode():
             output_ids = model.generate(
                 input_ids,
                 images=image_tensor,
-                pixel_values=ele_img_tensor.unsqueeze(0),
+                pixel_values=ele_img_tensors.unsqueeze(0),
                 img_mask=img_mask.unsqueeze(0),
                 do_sample=True,
                 temperature=args.temperature,
@@ -597,6 +583,9 @@ def main(args):
 
     with open(args.output_file, 'w', encoding='utf-8') as fout:
         json.dump(ret, fout, ensure_ascii=False, indent=2)
+    
+    with open(args.output_file.replace('.json', '_gt.json'), 'w', encoding='utf-8') as fout:
+        json.dump(gt, fout, ensure_ascii=False, indent=2)
 
     
 
@@ -615,6 +604,7 @@ if __name__ == "__main__":
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--json-file", type=str, required=True)
     parser.add_argument("--num-gpus", type=int, default=1)
+    parser.add_argument("--ele_cache_path", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--image-out", action="store_true")
     args = parser.parse_args()

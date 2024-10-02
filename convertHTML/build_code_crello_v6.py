@@ -113,7 +113,7 @@ class CustomDataLoader(DataLoader):
             self.coord_pred = INSTRUCTION_JSON.get("coord_pred")
     
         if args.add_task_instruction:
-            task_instruction = TASK_INSTRUCTION[args.dataset_name.replace("v5", "v4")]
+            task_instruction = TASK_INSTRUCTION[args.dataset_name.replace("v6", "v4")]
             self.cond_cate_to_size_pos = task_instruction + self.cond_cate_to_size_pos
             self.cond_cate_size_to_pos = task_instruction + self.cond_cate_size_to_pos
             self.cond_cate_pos_to_size = task_instruction + self.cond_cate_pos_to_size
@@ -121,7 +121,7 @@ class CustomDataLoader(DataLoader):
             self.unconditional = task_instruction + self.unconditional
             self.refinement = task_instruction + self.refinement
             self.completion = task_instruction + self.completion
-            task_instruction = TASK_INSTRUCTION[args.dataset_name.replace("v4", "v5")]
+            task_instruction = TASK_INSTRUCTION[args.dataset_name.replace("v4", "v6")]
             self.coord_pred = task_instruction + self.coord_pred
 
         self.cond_bbox_prefix=""

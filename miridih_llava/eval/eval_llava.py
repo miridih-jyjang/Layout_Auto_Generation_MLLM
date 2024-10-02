@@ -48,7 +48,7 @@ local_rank = None
 def compute_metrics(eval_pred, device):
     # pred, gt, mask, category, WH, device
     geo_pred, cat_pred, mask_pred = eval_pred.predictions
-    geo_gts, cat_gts, mask_gts = eval_pred.predictions
+    geo_gts, cat_gts, mask_gts = eval_pred.label_ids
     
     evaluator = Evaluator(device)
     result_dict = evaluator(geo_pred, geo_gts, cat_pred, cat_gts, mask_pred)
@@ -119,14 +119,17 @@ def __compute_mean_iou_for_layout(layout_1: Layout, layout_2: Layout) -> float:
     for l in list(set(li.tolist())):
         _bi = bi[np.where(li == l)]
         _bj = bj[np.where(lj == l)]
-        n = len(_bi)
+        n, m = len(_bi), len(_bj)
+        # Skip this iteration if either _bi or _bj is empty
+        if len(_bi) == 0 or len(_bj) == 0:
+            continue
         
         if n == 0:
             continue
         
-        ii, jj = np.meshgrid(range(n), range(n))
+        ii, jj = np.meshgrid(range(n), range(m))
         ii, jj = ii.flatten(), jj.flatten()
-        iou = compute_iou(_bi[ii], _bj[jj]).reshape(n, n)
+        iou = compute_iou(_bi[ii], _bj[jj]).reshape(n, m)
         
         # Set NaN values to a small number
         iou[np.isnan(iou)] = 1e-6
@@ -153,14 +156,21 @@ def __compute_maximum_iou_for_layout(layout_1: Layout, layout_2: Layout) -> floa
     for l in list(set(li.tolist())):
         _bi = bi[np.where(li == l)]
         _bj = bj[np.where(lj == l)]
-        n = len(_bi)
-        ii, jj = np.meshgrid(range(n), range(n))
+        
+        # Skip this iteration if either _bi or _bj is empty
+        if len(_bi) == 0 or len(_bj) == 0:
+            continue
+        
+        n, m = len(_bi), len(_bj)
+        ii, jj = np.meshgrid(range(n), range(m))
         ii, jj = ii.flatten(), jj.flatten()
-        iou = compute_iou(_bi[ii], _bj[jj]).reshape(n, n)
+        iou = compute_iou(_bi[ii], _bj[jj]).reshape(n, m)
         # note: maximize is supported only when scipy >= 1.4
         iou[np.isnan(iou)] = 1e-6
         ii, jj = linear_sum_assignment(iou, maximize=True)
         score += iou[ii, jj].sum().item()
+    if N == 0:
+        return 0.0
     return score / N
 
 def preprocess_layouts(layouts, types):
@@ -253,8 +263,8 @@ class Evaluator:
 
                 input_gt_geometry = selected_gt_geometry.reshape(1, -1, 4)
                 input_pd_geometry = selected_pd_geometry.reshape(1, -1, 4)
-                input_gt_class = selected_gt_cat.unsqueeze(0)
-                input_pd_class = selected_pd_cat.unsqueeze(0)
+                input_gt_class = selected_gt_cat.unsqueeze(0).long()  # Convert to long tensor
+                input_pd_class = selected_pd_cat.unsqueeze(0).long()  # Convert to long tensor
                 padding_mask = mask_[:, -1]
                 padding_mask = padding_mask[[padding_mask!=False]]
 
@@ -300,10 +310,6 @@ class Evaluator:
         norm_x1, norm_y1, norm_x2, norm_y2 = normalized_geometry[:, :, 0], normalized_geometry[:, :, 1], normalized_geometry[:, :, 2], normalized_geometry[:, :, 3]
         
         # Renormalize coordinates from [0, 1] to [-1, 1]
-        norm_x1 = 2 * norm_x1 - 1
-        norm_y1 = 2 * norm_y1 - 1
-        norm_x2 = 2 * norm_x2 - 1
-        norm_y2 = 2 * norm_y2 - 1
         
         # Calculate width, height, and center coordinates
         w = norm_x2 - norm_x1
@@ -395,7 +401,10 @@ class DataArguments:
     image_grid_pinpoints: Optional[str] = field(default=None)
     data_version: str = field(default='v1',
                               metadata={"help": "Version of Training data"})
-
+    ele_cache_path: str = field(default=None,
+                                metadata={"help": "Element clip encoded vectors."})
+    eval_ele_cache_path: str = field(default=None,
+                                metadata={"help": "Element clip encoded vectors."})
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -887,6 +896,111 @@ def pad_images(image, max_length):
 
     return image, mask
 
+
+@dataclass
+class DataCollatorForSupervisedDataset_v6_4(object):
+    
+    """Collate examples for supervised fine-tuning."""
+
+    tokenizer: transformers.PreTrainedTokenizer
+
+    def pad_sequences(self, sequences, max_len, padding_value=0):
+        """
+        Pads a list of sequences to a fixed max length.
+        
+        Args:
+        sequences (list of torch.Tensor): List of sequences (1D tensors) of various lengths.
+        max_len (int): The fixed length to pad each sequence to.
+        padding_value (float or int, optional): The value used for padding. Default is 0.
+        
+        Returns:
+        torch.Tensor: A tensor of shape (batch_size, max_len) with padded sequences.
+        """
+        # Initialize a tensor with padding_value, shape = (batch_size, max_len)
+        batch_size = len(sequences)
+        padded_sequences = torch.full((batch_size, max_len), padding_value)
+        
+        for i, seq in enumerate(sequences):
+            seq_len = seq.size(0)  # Length of the current sequence
+            if seq_len <= max_len:
+                # Copy the sequence into the padded tensor (truncate if necessary)
+                padded_sequences[i, :seq_len] = seq
+            else:
+                # Optionally, handle cases where sequences are longer than max_len
+                padded_sequences[i, :] = seq[:max_len]
+
+        return padded_sequences
+
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        input_ids, labels, pixel_values = tuple([instance[key] for instance in instances]
+                                  for key in ("input_ids", "labels", "pixel_values"))
+        # input_ids = self.pad_sequences(
+        #     input_ids,
+        #     max_len=self.tokenizer.model_max_length,
+        #     padding_value=self.tokenizer.pad_token_id)
+        # mask_list, image_list = [], []
+        # # max_image_length = max([img.shape[0] for img in pixel_values])
+        # max_image_length = MAX_ELE_NUM_CRELLO
+        # if type(pixel_values) == list: 
+        #     # mask_list: [batch_size, MAX_ELE_NUM_CRELLO, 1]
+        #     mask_list = [torch.tensor([True] * len(pv) + [False] * (MAX_ELE_NUM_CRELLO - len(pv))).bool() for pv in pixel_values]
+        #     # pixel_values: [batch_size, num_elements, [1x1024]] -> [batch_size, MAX_ELE_NUM_CRELLO, [1x1024]]
+        #     image_list = [torch.tensor(pv + [[[0] * len(pv[0][0])]] * (MAX_ELE_NUM_CRELLO - len(pv))) if len(pv) < MAX_ELE_NUM_CRELLO else torch.tensor(pv) for pv in pixel_values]
+
+        # else:
+        #     for img in pixel_values:
+        #         image, img_mask = pad_images(img,max_image_length)
+        #         image_list.append(image)
+        #         mask_list.append(img_mask)
+        # pixel_values = torch.stack(image_list).to(input_ids.device)
+        # img_mask = torch.stack(mask_list).to(input_ids.device)
+       
+        # labels = self.pad_sequences(labels,
+        #                             max_len=self.tokenizer.model_max_length,
+                                    # padding_value=IGNORE_INDEX)
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            input_ids,
+            batch_first=True,
+            padding_value=self.tokenizer.pad_token_id)
+        mask_list, image_list = [], []
+        max_image_length = max([len(pv) for pv in pixel_values])
+        # max_image_length = MAX_ELE_NUM_CRELLO
+        if type(pixel_values) == list: 
+            # mask_list: [batch_size, MAX_ELE_NUM_CRELLO, 1]
+            mask_list = [torch.tensor([True] * len(pv) + [False] * (max_image_length - len(pv))).bool() for pv in pixel_values]
+            # pixel_values: [batch_size, num_elements, [1x1024]] -> [batch_size, MAX_ELE_NUM_CRELLO, [1x1024]]
+            image_list = [torch.tensor(pv + [[[0] * len(pv[0][0])]] * (max_image_length - len(pv))) if len(pv) < max_image_length else torch.tensor(pv) for pv in pixel_values]
+
+        else:
+            for img in pixel_values:
+                image, img_mask = pad_images(img,max_image_length)
+                image_list.append(image)
+                mask_list.append(img_mask).to(input_ids.device)
+        img_mask = torch.stack(mask_list).to(input_ids.device)
+        pixel_values = torch.stack(image_list).to(input_ids.device)
+
+        labels = torch.nn.utils.rnn.pad_sequence(labels,
+                                                 batch_first=True,
+                                                 padding_value=IGNORE_INDEX)
+        input_ids = input_ids[:, :self.tokenizer.model_max_length]
+        labels = labels[:, :self.tokenizer.model_max_length]
+        batch = dict(
+            input_ids=input_ids,
+            labels=labels,
+            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            pixel_values=pixel_values,
+            img_mask = img_mask
+        )
+
+        if 'image' in instances[0]:
+            images = [instance['image'] for instance in instances]
+            if all(x is not None and x.shape == images[0].shape for x in images):
+                batch['images'] = torch.stack(images)
+            else:
+                batch['images'] = images
+
+        return batch
+    
 @dataclass
 class DataCollatorForSupervisedDataset_v6(object):
     """Collate examples for supervised fine-tuning."""
@@ -1029,7 +1143,12 @@ class DataCollatorForSupervisedDataset(object):
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    if 'v6' in data_args.data_version:
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
+        if 'miridih' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_v6_4 import LazyRealTimeRenderingDataset
+        elif 'crello' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_v6_4_crello import LazyRealTimeRenderingDataset
+    elif 'v6' in data_args.data_version:
         if 'miridih' in data_args.data_path:
             from miridih_llava.data.lazyRealtimeRender_v6 import LazyRealTimeRenderingDataset
         elif 'crello' in data_args.data_path:
@@ -1051,13 +1170,26 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
             from miridih_llava.data.lazyRealtimeRender_v3_crello import LazyRealTimeRenderingDataset
     else:
         print("error for version")
-    train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
-                                data_path=data_args.data_path,
-                                data_args=data_args)
-    dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
-                                data_path=data_args.dev_data_path,
-                                data_args=data_args)
-    if 'v6' in data_args.data_version:
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
+        train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
+                                    data_path=data_args.data_path,
+                                    ele_cache_path=data_args.ele_cache_path,
+                                    data_args=data_args)
+        dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
+                                    data_path=data_args.dev_data_path,
+                                    ele_cache_path=data_args.eval_ele_cache_path,
+                                    data_args=data_args)
+    else:
+        train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
+                                    data_path=data_args.data_path,
+                                    data_args=data_args)
+        dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
+                                    data_path=data_args.dev_data_path,
+                                    data_args=data_args)
+        
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
+        data_collator = DataCollatorForSupervisedDataset_v6_4(tokenizer=tokenizer)
+    elif 'v6' in data_args.data_version:
         data_collator = DataCollatorForSupervisedDataset_v6(tokenizer=tokenizer)
     elif 'v5' in data_args.data_version:
         data_collator = DataCollatorForSupervisedDataset_v5(tokenizer=tokenizer)
@@ -1096,7 +1228,13 @@ def eval():
                 **bnb_model_from_pretrained_args
             )
         else:
-            if "v6" in data_args.data_version:
+            if "v6.4" in data_args.data_version or 'v6.5' in data_args.data_version:
+                model = LlavaLlamaForCausalLM_v6_4.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                **bnb_model_from_pretrained_args
+            )
+            elif "v6" in data_args.data_version:
                 model = LlavaLlamaForCausalLM_v5.from_pretrained(
                 checkpoint_dir,
                 cache_dir=training_args.cache_dir,
@@ -1273,6 +1411,62 @@ def eval():
     model.config.use_cache = True
     wandb.finish()
 
+def eval_after_prediction(dataset_name, pred_json, gt_json):
+    from miridih_llava.train.trainer_pt_utils import EvalLoopContainer
+    from miridih_llava.train.trainer_utils import EvalLoopOutput
+    from miridih_llava.constants import IGNORE_INDEX, MAX_ELE_NUM_CRELLO
+    from helper.global_var import CONVERTED_DATASET_META
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    all_geo_preds = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+    all_cat_preds = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+    all_mask_preds = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+    all_geo_labels = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+    all_cat_labels = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+    all_mask_labels = EvalLoopContainer(do_nested_concat=False, padding_index=-100)
+        
+    all_preds = json.load(open(pred_json, 'r'))
+    all_gts = json.load(open(gt_json, 'r'))
+    geo_preds, cat_preds, mask_preds = [], [], []
+    geo_gts, cat_gts = [], []
+    for key_pd, key_gt in zip(all_preds, all_gts): # sample
+        assert key_pd == key_gt
+        sample_preds, sample_gts = all_preds[key_pd], all_gts[key_gt]
+        
+        for preds, gts in zip(sample_preds, sample_gts): # template
+            geo_pred, cat_pred = [[-1, -1, -1, -1, -1]] * MAX_ELE_NUM_CRELLO, [-1] * MAX_ELE_NUM_CRELLO
+            geo_gt, cat_gt = [[-1, -1, -1, -1, -1]] * MAX_ELE_NUM_CRELLO, [-1] * MAX_ELE_NUM_CRELLO
+            mask_pred = [[False, False, False, False, False]] * MAX_ELE_NUM_CRELLO
+            # mask_pred[:len(preds)] = [True, True, True, True, True]
+            for idx, (pred, gt) in enumerate(zip(preds, gts)): # element
+                geo_pred[idx], cat_pred[idx] = [float(b) for b in pred['box']] + [int(pred['layer'])], CONVERTED_DATASET_META[dataset_name][pred['label']]
+                geo_gt[idx], cat_gt[idx] = [float(b) for b in gt['box']] + [int(pred['layer'])], CONVERTED_DATASET_META[dataset_name][gt['label']]
+                mask_pred[idx]= [True, True, True, True, True]
+        geo_preds.append(torch.tensor(geo_pred).to(device).unsqueeze(0))
+        cat_preds.append(torch.tensor(cat_pred).to(device).unsqueeze(0))
+        geo_gts.append(torch.tensor(geo_gt).to(device).unsqueeze(0))
+        cat_gts.append(torch.tensor(cat_gt).to(device).unsqueeze(0))     
+        mask_preds.append(torch.tensor(mask_pred).to(device).unsqueeze(0))
+        
+       
+    logits = (geo_preds, cat_preds, mask_preds)
+    labels = (geo_gts, cat_gts, mask_preds)
+
+    num_samples = len(geo_preds)
+    return EvalLoopOutput(predictions=logits, label_ids=labels, metrics=None, num_samples=num_samples)
+            
 if __name__ == "__main__":
-    setproctitle('MIRIDIH-JJY')
+    import argparse
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset_name", type=str, default="miridih")
+    parser.add_argument("--pred_json", type=str, default=None)
+    parser.add_argument("--gt_json", type=str, default=None)
+    args = parser.parse_args()
+    setproctitle('jooyoung-jang')
     eval()
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # output = eval_after_prediction(args.dataset_name, args.pred_json, args.gt_json)
+    # compute_metrics(output, device)
+    

@@ -14,5 +14,5 @@ replace_llama_attn_with_flash_attn()
 from miridih_llava.train.train import train
 
 if __name__ == "__main__":
-    setproctitle('MIRIDIH-JJY')
+    setproctitle('jooyoung-jang')
     train()

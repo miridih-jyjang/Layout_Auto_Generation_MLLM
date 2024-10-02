@@ -33,11 +33,10 @@ from miridih_llava import conversation as conversation_lib
 from miridih_llava.model import *
 from miridih_llava.mm_utils import tokenizer_image_token
 from PIL import Image
-from deepspeed.runtime.utils import see_memory_usage
 from torch.nn.functional import pad
 from miridih_llava.eval.eval_llava import compute_metrics
 # datasets.config.IN_MEMORY_MAX_SIZE = 300 *1024 *1024 *1024
-
+torch.set_anomaly_enabled(True)
 local_rank = None
 
 def rank0_print(*args):
@@ -782,10 +781,10 @@ class DataCollatorForSupervisedDataset_v6_4(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids, labels, pixel_values = tuple([instance[key] for instance in instances]
                                   for key in ("input_ids", "labels", "pixel_values"))
-        # input_ids = self.pad_sequences(
-        #     input_ids,
-        #     max_len=self.tokenizer.model_max_length,
-        #     padding_value=self.tokenizer.pad_token_id)
+        input_ids = self.pad_sequences(
+            input_ids,
+            max_len=self.tokenizer.model_max_length,
+            padding_value=self.tokenizer.pad_token_id)
         # mask_list, image_list = [], []
         # # max_image_length = max([img.shape[0] for img in pixel_values])
         # max_image_length = MAX_ELE_NUM_CRELLO
@@ -803,21 +802,22 @@ class DataCollatorForSupervisedDataset_v6_4(object):
         # pixel_values = torch.stack(image_list).to(input_ids.device)
         # img_mask = torch.stack(mask_list).to(input_ids.device)
        
-        # labels = self.pad_sequences(labels,
-        #                             max_len=self.tokenizer.model_max_length,
-                                    # padding_value=IGNORE_INDEX)
-        input_ids = torch.nn.utils.rnn.pad_sequence(
-            input_ids,
-            batch_first=True,
-            padding_value=self.tokenizer.pad_token_id)
+        labels = self.pad_sequences(labels,
+                                    max_len=self.tokenizer.model_max_length,
+                                    padding_value=IGNORE_INDEX)
+        # print("**** [2] Data_Collate Function ****")
+        # input_ids = torch.nn.utils.rnn.pad_sequence(
+        #     input_ids,
+        #     batch_first=True,
+        #     padding_value=self.tokenizer.pad_token_id)
         mask_list, image_list = [], []
-        max_image_length = max([len(pv) for pv in pixel_values])
-        # max_image_length = MAX_ELE_NUM_CRELLO
+        # max_image_length = max([len(pv) for pv in pixel_values])
+        max_image_length = MAX_ELE_NUM_CRELLO
         if type(pixel_values) == list: 
             # mask_list: [batch_size, MAX_ELE_NUM_CRELLO, 1]
             mask_list = [torch.tensor([True] * len(pv) + [False] * (max_image_length - len(pv))).bool() for pv in pixel_values]
             # pixel_values: [batch_size, num_elements, [1x1024]] -> [batch_size, MAX_ELE_NUM_CRELLO, [1x1024]]
-            image_list = [torch.tensor(pv + [[[0] * len(pv[0][0])]] * (max_image_length - len(pv))) if len(pv) < max_image_length else torch.tensor(pv) for pv in pixel_values]
+            image_list = [torch.tensor(pv + [[[0] * len(pv[0][0])]] * (max_image_length - len(pv))) if len(pv) < max_image_length else torch.tensor(pv[:max_image_length]) for pv in pixel_values]
 
         else:
             for img in pixel_values:
@@ -827,9 +827,6 @@ class DataCollatorForSupervisedDataset_v6_4(object):
         img_mask = torch.stack(mask_list).to(input_ids.device)
         pixel_values = torch.stack(image_list).to(input_ids.device)
 
-        labels = torch.nn.utils.rnn.pad_sequence(labels,
-                                                 batch_first=True,
-                                                 padding_value=IGNORE_INDEX)
         input_ids = input_ids[:, :self.tokenizer.model_max_length]
         labels = labels[:, :self.tokenizer.model_max_length]
         batch = dict(
@@ -847,7 +844,7 @@ class DataCollatorForSupervisedDataset_v6_4(object):
             else:
                 batch['images'] = images
 
-        return batch
+        return batch   
     
 	
 	
@@ -888,17 +885,13 @@ class DataCollatorForSupervisedDataset_v6(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids, labels, pixel_values = tuple([instance[key] for instance in instances]
                                   for key in ("input_ids", "labels", "pixel_values"))
-        # input_ids = self.pad_sequences(
-        #     input_ids,
-        #     max_len=self.tokenizer.model_max_length,
-        #     padding_value=self.tokenizer.pad_token_id)
-        input_ids = torch.nn.utils.rnn.pad_sequence(
+        input_ids = self.pad_sequences(
             input_ids,
-            batch_first=True,
+            max_len=self.tokenizer.model_max_length,
             padding_value=self.tokenizer.pad_token_id)
         mask_list, image_list = [], []
-        max_image_length = max([img.shape[0] for img in pixel_values])
-        # max_image_length = MAX_ELE_NUM_CRELLO
+        # max_image_length = max([img.shape[0] for img in pixel_values])
+        max_image_length = MAX_ELE_NUM_CRELLO
         for img in pixel_values:
             image, img_mask = pad_images(img,max_image_length)
             image_list.append(image)
@@ -906,12 +899,12 @@ class DataCollatorForSupervisedDataset_v6(object):
         pixel_values = torch.stack(image_list).to(input_ids.device)
         img_mask = torch.stack(mask_list).to(input_ids.device)
         
-        # labels = self.pad_sequences(labels,
-        #                             max_len=self.tokenizer.model_max_length,
-        #                             padding_value=IGNORE_INDEX)
-        labels = torch.nn.utils.rnn.pad_sequence(labels,
-                                                 batch_first=True,
-                                                 padding_value=IGNORE_INDEX)
+        labels = self.pad_sequences(labels,
+                                    max_len=self.tokenizer.model_max_length,
+                                    padding_value=IGNORE_INDEX)
+        # labels = torch.nn.utils.rnn.pad_sequence(labels,
+        #                                          batch_first=True,
+        #                                          padding_value=IGNORE_INDEX)
         input_ids = input_ids[:, :self.tokenizer.model_max_length]
         labels = labels[:, :self.tokenizer.model_max_length]
         batch = dict(
@@ -1016,7 +1009,7 @@ class DataCollatorForSupervisedDataset(object):
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    if 'v6.4' in data_args.data_version:
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
         if 'miridih' in data_args.data_path:
             from miridih_llava.data.lazyRealtimeRender_v6_4 import LazyRealTimeRenderingDataset
         elif 'crello' in data_args.data_path:
@@ -1043,7 +1036,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
             from miridih_llava.data.lazyRealtimeRender_v3_crello import LazyRealTimeRenderingDataset
     else:
         print("error for version")
-    if 'v6.4' in data_args.data_version:
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
         train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.data_path,
                                     ele_cache_path=data_args.ele_cache_path,
@@ -1059,7 +1052,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
         dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.dev_data_path,
                                     data_args=data_args)
-    if 'v6.4' in data_args.data_version:
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
         data_collator = DataCollatorForSupervisedDataset_v6_4(tokenizer=tokenizer)
     elif 'v6' in data_args.data_version: 
         data_collator = DataCollatorForSupervisedDataset_v6(tokenizer=tokenizer)
@@ -1078,10 +1071,10 @@ def train():
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     if training_args.exp_name == "":
-        wandb.init(project='posterLlava-crello-instruction')
+        wandb.init(project='posterLlava-miridih-instruction')
     else:
         print("experiment: ", training_args.exp_name)
-        wandb.init(project='posterLlava-crello-instruction', name=training_args.exp_name)
+        wandb.init(project='posterLlava-miridih-instruction', name=training_args.exp_name)
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
 
@@ -1103,8 +1096,6 @@ def train():
             )
         ))
 
-    see_memory_usage('Memory usage before model creation', True)
-
     if model_args.vision_tower is not None:
         if 'mpt' in model_args.model_name_or_path:
             config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
@@ -1116,7 +1107,7 @@ def train():
                 **bnb_model_from_pretrained_args
             )
         else:
-            if "v6.4" in data_args.data_version:
+            if "v6.4" in data_args.data_version or 'v6.5' in data_args.data_version:
                 model = LlavaLlamaForCausalLM_v6_4.from_pretrained(
                 model_args.model_name_or_path,
                 cache_dir=training_args.cache_dir,
@@ -1266,14 +1257,13 @@ def train():
     trainer = LLaVATrainer(model=model,
                     tokenizer=tokenizer,
                     args=training_args,
+                    content_aware_layout_generation_compute_metrics=compute_metrics,
                     **data_module)
     
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)
     else:
-        see_memory_usage('Memory usage before training', True)
-
         trainer.train()
     trainer.save_state()
 
