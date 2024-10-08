@@ -25,7 +25,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, \
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
-from miridih_llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX
+from miridih_llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, PAD_TOKEN_INDEX
 
 
 class LlavaConfig(LlamaConfig):
@@ -409,7 +409,8 @@ class LlavaLlamaForCausalLM_v6_4(LlavaLlamaForCausalLM_v5):
     
     def prepare_inputs_labels_for_multimodal(
         self, input_ids, attention_mask, past_key_values, labels, images, ele_images, img_mask):
-        max_token_length = input_ids.shape[1]
+        # max_token_length = input_ids.shape[1]
+        max_token_length = 4096
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[1] == 1:
@@ -450,8 +451,8 @@ class LlavaLlamaForCausalLM_v6_4(LlavaLlamaForCausalLM_v5):
                 continue
             image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0]
             original_num_image_token_indices = len(image_token_indices)
-            # print("original_num_image_token_indices: ", original_num_image_token_indices)
-            # assert(len(image_token_indices) == ele_image_features.shape[0]+1)
+            
+            # cur_new_input_embeds = torch.full((image_features[batch_idx].shape[0]+cur_input_ids.shape[0]-1, image_features[batch_idx].shape[1]), PAD_TOKEN_INDEX, device=image_features.device, dtype=image_features.dtype)
             cur_new_input_embeds = []
             if labels is not None:
                 cur_labels = labels[batch_idx]
@@ -459,7 +460,7 @@ class LlavaLlamaForCausalLM_v6_4(LlavaLlamaForCausalLM_v5):
                 assert cur_labels.shape == cur_input_ids.shape
             # print("cur_input_ids: {}\tbatch_idx: {}\timg_mask[batch_idx]: {}\tIMAGE_TOKEN_INDEX: {}".format(cur_input_ids.shape, batch_idx, img_mask[batch_idx].sum(), (cur_input_ids == IMAGE_TOKEN_INDEX).sum()))
             
-            cur_input_ids[image_token_indices] = 0.0
+            cur_input_ids[image_token_indices] = PAD_TOKEN_INDEX
             
             # print("cur_new_input_embeds: ", cur_new_input_embeds.shape)
             
@@ -471,21 +472,23 @@ class LlavaLlamaForCausalLM_v6_4(LlavaLlamaForCausalLM_v5):
                 cur_new_labels.append(labels[batch_idx][image_token_start+1:])
                 cur_new_labels = torch.cat(cur_new_labels, dim=0)
                 new_labels.append(cur_new_labels)
-                
+            
+            # cur_new_input_embeds[:image_token_start] = self.get_model().embed_tokens(cur_input_ids[:image_token_start]).detach()
+            # cur_new_input_embeds[image_token_start:image_token_start+image_features[batch_idx].shape[0]] = image_features[batch_idx].detach()
+            # cur_new_input_embeds[image_token_start+image_features[batch_idx].shape[0]:] = self.get_model().embed_tokens(cur_input_ids[image_token_start+1:]).detach()
             cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[:image_token_start]).detach())
             cur_new_input_embeds.append(image_features[batch_idx].squeeze(0))
             cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids[image_token_start+1:]).detach())
             cur_new_input_embeds = torch.cat(cur_new_input_embeds, dim=0)
-            # cur_new_input_embeds[image_token_indices[0]] = image_features[batch_idx].squeeze(0)
-            # cur_new_labels[image_token_indices] = IGNORE_INDEX
-            new_input_embeds.append(cur_new_input_embeds)
+
             
-            
+            shifted_ele_image_token_indices = (image_token_indices[1:] + (image_features[batch_idx].shape[0] - 1)).detach()
             if batch_idx == 0:
-                image_token_indices[1:] = image_token_indices[1:] + (image_features[batch_idx].shape[0] - 1)
-                cur_new_input_embeds[image_token_indices[1:]] = ele_image_features[:len(image_token_indices[1:])].squeeze(1).to(cur_new_input_embeds.dtype)
+                cur_new_input_embeds[shifted_ele_image_token_indices] = ele_image_features[:len(image_token_indices[1:])].squeeze(1).to(cur_new_input_embeds.dtype).detach()
             else:
-                cur_new_input_embeds[image_token_indices[1:]] = ele_image_features[img_count[batch_idx-1]:img_count[batch_idx-1]+len(image_token_indices[1:])].squeeze(1).to(cur_new_input_embeds.dtype)
+                cur_new_input_embeds[shifted_ele_image_token_indices] = ele_image_features[img_count[batch_idx-1]:img_count[batch_idx-1]+len(image_token_indices[1:])].squeeze(1).to(cur_new_input_embeds.dtype).detach()
+                
+            new_input_embeds.append(cur_new_input_embeds)
             
         
         new_input_embeds = torch.stack(new_input_embeds, dim=0)

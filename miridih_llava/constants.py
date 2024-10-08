@@ -6,6 +6,7 @@ LOGDIR = "./logs/gradio/"
 # Model Constants
 IGNORE_INDEX = -100
 IMAGE_TOKEN_INDEX = -200
+PAD_TOKEN_INDEX = 0
 MAX_ELE_NUM_CRELLO = 50
 DEFAULT_IMAGE_TOKEN = "<image>"
 DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"

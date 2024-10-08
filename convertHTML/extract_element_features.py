@@ -29,7 +29,7 @@ class LlavaConfig(LlamaConfig):
     mm_resampler_type= None
     mm_use_im_patch_token= False
     mm_use_im_start_end= False
-    mm_vision_select_feature= "patch"
+    mm_vision_select_feature= "cls_patch"
     mm_vision_select_layer= -2
     mm_vision_tower= "openai/clip-vit-large-patch14-336"
     model_type= "miridih_llava"
@@ -87,15 +87,16 @@ def feature_select(image_forward_outs):
     return image_features
 
 def main(use_resized_img=False):
-    csv_path = "data/crello-v4/raw/train/train.csv"
-    base_path = "data/crello-v4"
+    # csv_path = "/workspace/data/crello-v4/raw/train/train.csv"
+    csv_path = "/workspace/data/crello-v4/raw/val/val.csv"
+    base_path = "/workspace/data/crello-v4"
 
     csv_data = pd.read_csv(csv_path)
     csv_data.loc[:, 'priority'] = csv_data['priority'].astype(float).astype(int)
     csv_data = csv_data.sort_values(by='priority')
 
     batch_size = 64
-    output_json = "./train_element_clip_features.json"
+    output_json = "./eval_element_clip_features.json"
     vision_tower_name = 'openai/clip-vit-large-patch14-336'
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # vision_tower = CLIPVisionModel.from_pretrained(vision_tower_name)
@@ -107,6 +108,7 @@ def main(use_resized_img=False):
     vision_tower.to(device=device, dtype=torch.float16)
 
     results = {}
+    print ("csv file length: ", len(csv_data))
     # iterate image files of elements and extract element image features
     for start_idx in tqdm(range(0, len(csv_data), batch_size), desc="Loading images in batches"):
         end_idx = start_idx + batch_size
@@ -116,10 +118,7 @@ def main(use_resized_img=False):
         image_paths = []
 
         for _, image_info in batch_data.iterrows():        
-            template_id = image_info['reformat_image_file_name'].split('/')[-1].split('_')[0]
-            if template_id in results:
-                continue
-         
+            template_id = image_info['reformat_image_file_name'].split('/')[-1].split('_')[0]         
             image_path = os.path.join(base_path, image_info['reformat_image_file_name'])
             image_tensor = load_and_preprocess_image(image_path, image_processor)
             image_tensor = image_tensor.to(vision_tower.device, dtype=torch.float16)
@@ -135,9 +134,8 @@ def main(use_resized_img=False):
         for k, image_features in enumerate(batch_features):
             image_features = image_features.cpu().numpy().tolist()
             image_path = image_paths[k]
-            if template_id not in results:
-                results[template_id] = {}
-            results[template_id][os.path.basename(image_path)] = image_features
+            if os.path.basename(image_path) not in results:
+                results[os.path.basename(image_path)] = image_features
     
     with open(output_json, 'w') as f:
         json.dump(results, f, indent=4)
