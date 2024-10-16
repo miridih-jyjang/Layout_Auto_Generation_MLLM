@@ -23,8 +23,9 @@ from io import BytesIO
 from transformers import TextStreamer
 
 bbox_extract =     re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)'")
-bbox_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'file_name':\s*'([^']*)'")
-bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+bbox_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]+)\],\s*'layer':\s*([\d.]+),\s*'file_name':\s*'([^']*)'")
+# bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]+)\],\s*'layer':\s*(\d+(?:\.\d+)?),\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
 bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
 bbox_layer_IMG_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'\[IMG(\d+)\]':\s*'<image>',\s*'file_name':\s*'([^']*)'")
 bbox_extract_wo_filename = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'src':\s*'([^']*)'")
@@ -170,10 +171,9 @@ def online_rendering(image_folder, skin_img_file, annotations, i_entry, args, ta
     rendering_image = Image.open(os.path.join(image_folder, skin_img_file))
     # W, H = rendering_image.size
     global W, H
-    # merge_image = Image.new("RGBA", rendering_image.size)
-    merge_image = Image.new("RGBA", (W, H))
-    # img_width, img_height = rendering_image.size
-    img_width, img_height = W, H
+    rendering_image = rendering_image.resize((W, H))
+    merge_image = Image.new("RGBA", rendering_image.size)
+    img_width, img_height = rendering_image.size
     for idx, anno in enumerate(annotations):
         ele_img_file = anno['file_name']
         template_id, page_num, ele_num = ele_img_file.split('.')[0].split('_')
@@ -431,6 +431,8 @@ def main(args):
     # Model
     disable_torch_init()
 
+    data = json.load(open(args.json_file, 'r', encoding='utf-8'))
+    
     model_name = get_model_name_from_path(args.model_path)
     tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name)
     with open(args.ele_cache_path, 'r') as f:
@@ -455,8 +457,7 @@ def main(args):
         roles = ('user', 'assistant')
     else:
         roles = conv.roles
-
-    data = json.load(open(args.json_file, 'r', encoding='utf-8'))
+        
     ret, gt = {}, {}
     
     os.makedirs(os.path.join('/'.join(args.output_file.split('/')[:-1]), 'gt'), exist_ok=True)
@@ -495,6 +496,13 @@ def main(args):
         template_id = int(template_id)
         page_num = int(page_num)
         
+        # Added part #
+        resolution_match = re.findall(resolution_pattern, entry['conversations'][0]['value'])
+        global W, H
+        W, H = tuple(map(int, resolution_match[0]))
+        
+        ##############
+
         if ('refine' in entry['image']) or ('complete' in entry['image']):
             image_file = f"miridih-v6.4/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_1.png"
             image = online_rendering(args.data_path, image_file, merged_filelist, i_entry, args, entry['image']).convert('RGB')
@@ -509,6 +517,7 @@ def main(args):
             else:
                 image = Image.open(os.path.join(args.data_path, image_file)).convert('RGB')
 
+        image = image.resize((W, H))
         image_tensor = process_images([image], image_processor, args)
         image_tensor = image_tensor.to(model.device, dtype=torch.float16)
 
@@ -544,7 +553,7 @@ def main(args):
         if "posterllava/posterllava_v0" in args.model_path:
             prompt = replace_keys(prompt, MIRIDIH2QB)
 
-
+        
         input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(model.device)
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
         keywords = [stop_str]
@@ -576,14 +585,14 @@ def main(args):
                 #         r['file_name'] = v['file_name']
                 #         break
 
-            if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"input_complete/{template_id}_{page_num:01}.jpg")):
-                try:
-                    # thumbnail_image_file = os.path.join(args.data_path, image_file.replace('_1.png', '_0.png'))
-                    # thumbnail_img = Image.open(thumbnail_image_file).convert('RGB')
-                    # thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_{page_num:01}.jpg"))
-                    image.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"input_complete/{template_id}_{page_num:01}.jpg"))
-                except:
-                    print("{} is not existing!!".format(f"{template_id:08}_{page_num:01}.jpg"))
+            # if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"input_complete/{template_id}_{page_num:01}.jpg")):
+            #     try:
+            #         # thumbnail_image_file = os.path.join(args.data_path, image_file.replace('_1.png', '_0.png'))
+            #         # thumbnail_img = Image.open(thumbnail_image_file).convert('RGB')
+            #         # thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_{page_num:01}.jpg"))
+            #         image.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"input_complete/{template_id}_{page_num:01}.jpg"))
+            #     except:
+            #         print("{} is not existing!!".format(f"{template_id:08}_{page_num:01}.jpg"))
             if entry['image'] == 'refine': # refinement
                 if len(invalid_filenames) > 0:
                     args.debug = False
@@ -591,6 +600,7 @@ def main(args):
                     args.debug = True
                 else:
                     image = Image.open(os.path.join(args.data_path, image_file)).convert('RGB')
+                    image = image.resize((W, H))
             if "posterllava/posterllava_v0" in args.model_path:
                 drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["QB"], args.data_path)  # Adjust the category as needed
             else:
