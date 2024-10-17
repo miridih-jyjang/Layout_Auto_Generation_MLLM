@@ -14,9 +14,10 @@ MASTER_PORT=29510
 #             "data/miridih-max25-v4/annotations/val_llava_complete.json")
 #json_files=("/workspace/data/miridih-v6.4/annotations/val_coord_pred.json")
 # json_files=("/workspace/data/miridih-v6.4/annotations/val_complete.json")
-json_files=("/workspace/data/scenarios/annotations/ca_squad_val_coord_pred.json",
-            "/workspace/data/scenarios/annotations/ca_squad_val_refine.json.json",
-            "/workspace/data/scenarios/annotations/ca_squad_val_cp2s.json",)
+json_files=("/workspace/data//annotations/ca_squad_val_coord_pred.json",
+            "/workspace/data/ca_squad/annotations/ca_squad_val_refine.json.json",
+           "/workspace/data/ca_squad/annotations/ca_squad_val_cp2s.json",)
+
 # Output directory
 #output_dir="output/$ckpt_name"
 output_dir=/data/checkpoints/jjy/llava_v1.5_7b_miridih_v6.4_1e_append/output_temp0.2_samp
