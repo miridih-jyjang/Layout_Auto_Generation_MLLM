@@ -14,7 +14,9 @@ MASTER_PORT=29510
 #             "data/miridih-max25-v4/annotations/val_llava_complete.json")
 #json_files=("/workspace/data/miridih-v6.4/annotations/val_coord_pred.json")
 # json_files=("/workspace/data/miridih-v6.4/annotations/val_complete.json")
-json_files=("/workspace/data/scenarios/annotations/testA_cp2s.json")
+json_files=("/workspace/data/scenarios/annotations/ca_squad_val_coord_pred.json",
+            "/workspace/data/scenarios/annotations/ca_squad_val_refine.json.json",
+            "/workspace/data/scenarios/annotations/ca_squad_val_cp2s.json",)
 # Output directory
 #output_dir="output/$ckpt_name"
 output_dir=/data/checkpoints/jjy/llava_v1.5_7b_miridih_v6.4_1e_append/output_temp0.2_samp
@@ -32,12 +34,11 @@ for i in "${!json_files[@]}"; do
     #gpu_index=$((i % 8))  # Assuming you have 8 GPUs (0, 1, 2, 3, 4, 5, 6, 7)
     gpu_index=$(((i % 5) + 0))
     # Run the command with the dynamically set GPU index
-    CUDA_VISIBLE_DEVICES=$gpu_index torchrun --nproc_per_node=$num_gpu --master_addr $MASTER_ADDR --master_port $MASTER_PORT  miridih_llava/serve/cli_multi_v6_4_scenario_A.py \
+    CUDA_VISIBLE_DEVICES=$gpu_index torchrun --nproc_per_node=$num_gpu --master_addr $MASTER_ADDR --master_port $MASTER_PORT  miridih_llava/serve/cli_multi_v6_ca_squad_miridih.py \
     --model-path /data/checkpoints/jjy/$ckpt_name \
     --json-file ${json_files[$i]} \
     --max-new-tokens 4096 \
     --temperature 0.2 \
-    --ele_cache_path ./train_element_clip_features_miridih.json \
     --output-file $output_file \
     --num-gpus $num_gpu --data-path /workspace/data \
     --image-out 
