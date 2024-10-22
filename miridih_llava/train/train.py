@@ -1009,7 +1009,10 @@ class DataCollatorForSupervisedDataset(object):
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
+    if 'v6.6' in data_args.data_version:
+        if 'miridih' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_v6_6 import LazyRealTimeRenderingDataset
+    elif 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
         if 'miridih' in data_args.data_path:
             from miridih_llava.data.lazyRealtimeRender_v6_4 import LazyRealTimeRenderingDataset
         elif 'crello' in data_args.data_path:
@@ -1107,7 +1110,13 @@ def train():
                 **bnb_model_from_pretrained_args
             )
         else:
-            if "v6.4" in data_args.data_version or 'v6.5' in data_args.data_version:
+            if "v6.6" in data_args.data_version:
+                model = LlavaLlamaForCausalLM_v6_6.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                **bnb_model_from_pretrained_args
+            )
+            elif "v6.4" in data_args.data_version or 'v6.5' in data_args.data_version:
                 model = LlavaLlamaForCausalLM_v6_4.from_pretrained(
                 model_args.model_name_or_path,
                 cache_dir=training_args.cache_dir,

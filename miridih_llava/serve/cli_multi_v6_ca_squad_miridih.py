@@ -23,10 +23,11 @@ from io import BytesIO
 from transformers import TextStreamer
 
 bbox_extract =     re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)'")
-bbox_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*([\d.]+),\s*'file_name':\s*'([^']*)'")
-bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d.+),\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
-bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
-bbox_layer_IMG_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d.+),\s*'\[IMG(\d+)\]':\s*'<image>',\s*'file_name':\s*'([^']*)'")
+bbox_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*([\d]+),\s*'file_name':\s*'([^']*)'")
+bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.]+|''),\s*([-\d.]+|''),\s*([-\d.]+|''),\s*([-\d.]+|''\s*)\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+bbox_layer_IMG_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.]+|''),\s*([-\d.]+|''),\s*([-\d.]+|''),\s*([-\d.]+|''\s*)\],\s*'layer':\s*([\d.]+),\s*'\[IMG(\d+)\]':\s*'<image>',\s*'file_name':\s*'([^']*)'")
+
 bbox_extract_wo_filename = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'src':\s*'([^']*)'")
 bbox_extract_wo_src_filename = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+)")
 resolution_pattern = r"\[([0-9]+),([0-9]+)\]"
@@ -119,15 +120,17 @@ def draw_box(img, elems, cls2color, data_path):
         template_id, page_num, ele_num = file_name.split('.')[0].split('_')
         template_id = int(template_id)
         page_num = int(page_num)
-        image_file = f"{data_path}/ca_squad/images/{template_id}_{template_id}_{ele_num}.png"
+        image_file = f"{data_path}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num:01}.png"
             
         overlay_img = Image.open(image_file).convert("RGBA")
         # color = cls2color[clss.lower()]
         try:
-            left, top, right, bottom = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+            # left, top, right, bottom = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+            left, top, width, height = float(box[0]), float(box[1]), float(box[2]), float(box[3])
         except:
             continue
-        ele_width, ele_height = W*(right-left), H*(bottom-top)
+        # ele_width, ele_height = W*(right-left), H*(bottom-top)
+        ele_width, ele_height = W*(width), H*(height)
         overlay_img = overlay_img.resize((max(1, round(ele_width)), max(1,round(ele_height))))
         _, _, _, overlay_img_mask = overlay_img.split()
         rendering_image.paste(overlay_img, (int(left*W), int(top*H)), overlay_img_mask)
@@ -138,12 +141,6 @@ def draw_box(img, elems, cls2color, data_path):
     # drawn_outline = drawn_outline.convert("RGBA")
     # drawn = Image.alpha_composite(drawn_outline, drawn_fill)
     return merge_image
-def sort_key(item):
-    # Split the path and file name, then extract the number after the last underscore and before .png
-    layer = item[3]  # Get file name (e.g., '5953615d95a7a863ddce1423_4.png')
-    file_name = item[0]
-    number = int(layer)  # Extract '4' as integer
-    return (number, file_name)
 
 
 def draw_boxmap(json_response, valid_eles, invalid_eles, background_image, cls2color, data_path):
@@ -151,7 +148,7 @@ def draw_boxmap(json_response, valid_eles, invalid_eles, background_image, cls2c
     inval_cls_box = [(invalid_ele['file_name'], invalid_ele['label'], [invalid_ele['x1'], invalid_ele['y1'], invalid_ele['x2'], invalid_ele['y2']], invalid_ele['layer']) for invalid_ele in invalid_eles]
     cls_box = [(valid_ele['file_name'], elem['label'], elem['box'], elem['layer']) for valid_ele, elem in zip(valid_eles[:ele_num], json_response[:ele_num])]
     cls_box = cls_box + inval_cls_box
-    cls_box = sorted(cls_box, key=sort_key)
+    
 
     # print(cls_box)
     drawn = draw_box(background_image, cls_box, cls2color, data_path)
@@ -180,7 +177,7 @@ def online_rendering(image_folder, skin_img_file, annotations, i_entry, args, ta
         template_id, page_num, ele_num = ele_img_file.split('.')[0].split('_')
         template_id = int(template_id)
         page_num = int(page_num)
-        image_file = f"{image_folder}/ca_squad/images/{template_id}_{template_id}_{ele_num}.png"
+        image_file = f"{image_folder}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num}.png"
         
         overlay_img = Image.open(image_file).convert("RGBA")
         ele_width, ele_height = W*(float(anno['x2'])-float(anno['x1'])), H*(float(anno['y2']) - float(anno['y1']))
@@ -192,10 +189,10 @@ def online_rendering(image_folder, skin_img_file, annotations, i_entry, args, ta
         merge_image = Image.alpha_composite(merge_image, rendering_image)
         
     if args.debug and len(annotations) > 0 and i_entry < 10:    
-        image_file = f"data/ca_squad/images/{template_id}_{page_num}_01.png"
+        image_file = f"data/ca_squad/images/{page_num:03}/{template_id:08}/{template_id}_{page_num}_01.png"
         
         if (task == 'refine') or (task == 'complete'): # completion & refinement
-            merge_image.convert('RGB').save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id}_{page_num}_{task}_input.jpg"))
+            merge_image.convert('RGB').save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_{task}_input.jpg"))
         # if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id}_{page_num}_thumbnail.jpg")): # conditional
         #     thumbnail_img = Image.open(image_file).convert('RGB')
         #     thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id}_{page_num}_thumbnail.jpg"))
@@ -259,18 +256,20 @@ def extract_unmasked_elements(bbox_html):
         matches = bbox_layer_IMG_extract.findall(bbox_html)
         file_attributes = []
         for match in matches:
-            box = match[1].split(',')
+            label, left, top, right, bottom, layer, img_num, file_name = match
+            # Convert empty strings in bounding boxes to None, otherwise convert to float
+            box = [left, top, right, bottom]
             if "''" in box:
                 continue
             file_attributes.append(
                     {
-                        "file_name": match[4],
-                        "label": match[0],
+                        "file_name": file_name,
+                        "label": label,
                         "x1": box[0],
                         "y1": box[1],
                         "x2": box[2],
                         "y2": box[3],
-                        "layer": match[2],
+                        "layer": layer
                     }  
                 )
 
@@ -478,10 +477,11 @@ def main(args):
         pixel_values = []
         for element in valid_filenames:
             element = element['file_name']
-            template_id, _, ele_num = element.split('.')[0].split('_')
+            template_id, page_num, ele_num = element.split('.')[0].split('_')
             template_id = int(template_id)
+            page_num = int(page_num)
             ele_num = int(ele_num)
-            ele_file_path = os.path.join(args.data_path, 'ca_squad/images', f"{template_id}_{template_id}_{ele_num}.png")
+            ele_file_path = os.path.join(args.data_path, 'ca_squad/images', f"{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num:01}.png")
             ele_img = Image.open(ele_file_path).convert('RGB')
             pixel_values.append(ele_img)  
         try:
@@ -503,13 +503,13 @@ def main(args):
         page_num = int(page_num)
         
         if ('refine' in entry['image']) or ('complete' in entry['image']):
-            image_file = f"ca_squad/images/{template_id}_{template_id}_1.png"
+            image_file = f"ca_squad/images/{page_num}_{page_num}_1.png"
             image = online_rendering(args.data_path, image_file, merged_filelist, i_entry, args, entry['image']).convert('RGB')
         else:
-            if os.path.isfile(f"{args.data_path}/ca_squad/images/{template_id}_{template_id}_1.png"):
-                image_file = f"ca_squad/images/{template_id}_{template_id}_1.png"
+            if os.path.isfile(f"{args.data_path}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_1.png"):
+                image_file = f"ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_1.png"
             else:
-                image_file = f"ca_squad/images/{template_id}_{template_id}_0.png"
+                image_file = f"ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_0.png"
 
             if len(invalid_filenames) > 0:
                 image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args, entry['image']).convert('RGB')
