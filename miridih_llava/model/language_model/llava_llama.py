@@ -549,7 +549,7 @@ class LlavaLlamaForCausalLM_v6_6(LlavaLlamaForCausalLM_v5):
             ele_images = ele_images[img_mask.bool()] # [N_1+N_2+..+N_B] x 3, 336, 336
             if len(ele_images) > 0:
                 self.model.vision_tower.select_feature = 'cls_patch'
-                ele_image_features = self.encode_images(ele_images) # [N_1+N_2+..+N_B], 576, 4096
+                ele_image_features = self.encode_images(ele_images) # [N_1+N_2+..+N_B], 1, 4096
             img_count = img_mask.sum(1).cumsum(0)
         else:
             ele_image_features = torch.empty(0).to(ele_images.device)

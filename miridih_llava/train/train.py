@@ -1009,7 +1009,10 @@ class DataCollatorForSupervisedDataset(object):
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                 data_args) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    if 'v6.6' in data_args.data_version:
+    if 'v6.7' in data_args.data_version:
+        if 'crello' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_v6_7_crello import LazyRealTimeRenderingDataset
+    elif 'v6.6' in data_args.data_version:
         if 'miridih' in data_args.data_path:
             from miridih_llava.data.lazyRealtimeRender_v6_6 import LazyRealTimeRenderingDataset
     elif 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
@@ -1039,7 +1042,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
             from miridih_llava.data.lazyRealtimeRender_v3_crello import LazyRealTimeRenderingDataset
     else:
         print("error for version")
-    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version or 'v6.7' in data_args.data_version:
         train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.data_path,
                                     ele_cache_path=data_args.ele_cache_path,
@@ -1055,7 +1058,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
         dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.dev_data_path,
                                     data_args=data_args)
-    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version or 'v6.7' in data_args.data_version:
         data_collator = DataCollatorForSupervisedDataset_v6_4(tokenizer=tokenizer)
     elif 'v6' in data_args.data_version: 
         data_collator = DataCollatorForSupervisedDataset_v6(tokenizer=tokenizer)
@@ -1074,10 +1077,10 @@ def train():
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     if training_args.exp_name == "":
-        wandb.init(project='posterLlava-miridih-instruction')
+        wandb.init(project='posterLlava-crello-instruction')
     else:
         print("experiment: ", training_args.exp_name)
-        wandb.init(project='posterLlava-miridih-instruction', name=training_args.exp_name)
+        wandb.init(project='posterLlava-crello-instruction', name=training_args.exp_name)
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
 
@@ -1116,7 +1119,7 @@ def train():
                 cache_dir=training_args.cache_dir,
                 **bnb_model_from_pretrained_args
             )
-            elif "v6.4" in data_args.data_version or 'v6.5' in data_args.data_version:
+            elif "v6.4" in data_args.data_version or 'v6.5' in data_args.data_version or 'v6.7' in data_args.data_version:
                 model = LlavaLlamaForCausalLM_v6_4.from_pretrained(
                 model_args.model_name_or_path,
                 cache_dir=training_args.cache_dir,
@@ -1203,6 +1206,20 @@ def train():
             )
     elif model_args.version == "v0.5":
         tokenizer.pad_token = tokenizer.unk_token
+    elif model_args.version == "v6.7":
+        tokenizer.pad_token = tokenizer.unk_token
+        if model_args.version in conversation_lib.conv_templates:
+            conversation_lib.default_conversation = conversation_lib.conv_templates[model_args.version]
+        else:
+            conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1"]
+        ELE_IMAGE_TOKENS = [f"<image{i}>" for i in range(50)]
+
+        smart_tokenizer_and_embedding_resize(
+                special_tokens_dict=dict(additional_special_tokens=ELE_IMAGE_TOKENS),
+                tokenizer=tokenizer,
+                model=model,
+            )
+
     else:
         tokenizer.pad_token = tokenizer.unk_token
         if model_args.version in conversation_lib.conv_templates:
