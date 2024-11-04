@@ -7,6 +7,7 @@ from miridih_llava.data import DataArguments, rank0_print, preprocess_multimodal
 from typing import Dict
 from PIL import Image
 import re
+import copy
 
 class LazyRealTimeRenderingDataset(Dataset):
     """Dataset for supervised fine-tuning."""
@@ -15,6 +16,7 @@ class LazyRealTimeRenderingDataset(Dataset):
                  tokenizer: transformers.PreTrainedTokenizer,
                  data_args: DataArguments):
         super(LazyRealTimeRenderingDataset, self).__init__()
+        self.data_path = data_path
         list_data_dict = json.load(open(data_path, "r"))
         self.ele_cache_path = json.load(open(ele_cache_path, "r"))
         rank0_print("Formatting inputs...Skip in lazy mode")
@@ -51,13 +53,16 @@ class LazyRealTimeRenderingDataset(Dataset):
         return length_list
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-        sources = self.list_data_dict[i]
+        sources = copy.deepcopy(self.list_data_dict[i])
         pixel_values = []
         assert (isinstance(i, int))
         if isinstance(i, int):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
         if 'image' in sources[0]:
+            if 'file_name' not in sources[0]['conversations'][1]['value']:
+                print("file_name not in gt in {} index: {}".format(i, self.list_data_dict[i]) )
+                
             image_file = self.list_data_dict[i]['image']
             image_folder = self.data_args.image_folder
             processor = self.data_args.image_processor
@@ -68,7 +73,7 @@ class LazyRealTimeRenderingDataset(Dataset):
                 pixel_values.append(self.ele_cache_path[ele_file]) 
                 
             if image_file == "complete" or image_file == "refine":
-                # crello-v5/images/59b7a5501350e8329300f1e7_1.png
+                # crello-v6/images/59b7a5501350e8329300f1e7_1.png
                 skin_image_file = self.list_data_dict[i]['id'].replace('_0', '_1.png')
                 image_file = f'crello-v6/images/{skin_image_file}'
                 merged_filelist = self.merge_lists_without_overlap(self.extract_unmasked_elements(sources[0]['conversations'][0]['value']), invalid_filenames)
@@ -157,12 +162,12 @@ class LazyRealTimeRenderingDataset(Dataset):
         if len(pixel_values) == 0:
             crop_size = self.data_args.image_processor.crop_size
             data_dict['pixel_values'] = torch.empty(0)
+            print("empty elements at ", image_file)
         else:
             data_dict['pixel_values'] = pixel_values
-
-            if len(pixel_values[0][0]) != 1024:
-                print(image_file)
         
+        if len(pixel_values[0][0]) != 1024:
+            print(image_file)
         return data_dict
 
     def modify_rects(self, input_string):
@@ -206,7 +211,7 @@ class LazyRealTimeRenderingDataset(Dataset):
             ele_img_file = anno['file_name']
             template_id, page_num = ele_img_file.split('/')[-1].split('.')[0].split('_')
             page_num = int(page_num)
-            image_file = f"{image_folder}/crello-v5/{ele_img_file}"
+            image_file = f"{image_folder}/crello-v6/{ele_img_file}"
             overlay_img = Image.open(image_file).convert("RGBA")
             ele_width, ele_height = W*(float(anno['x2'])-float(anno['x1'])), H*(float(anno['y2']) - float(anno['y1']))
             
@@ -220,7 +225,7 @@ class LazyRealTimeRenderingDataset(Dataset):
         #     temp= anno['file_name'].replace('.png', f'_{idx+1}.png')
         #     merge_image.save(f'/workspace/data/debugging/{temp}')
         
-        #     image_file = f"/workspace/data/crello-v5/images/{template_id}_0.png"
+        #     image_file = f"/workspace/data/crello-v6/images/{template_id}_0.png"
                 
         #     if not os.path.isfile(f"/workspace/data/debugging/gt/{template_id}_{page_num:01}_gt.png"):
         #         thumbnail_img = Image.open(image_file)

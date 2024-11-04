@@ -5,13 +5,43 @@ import os
 import sys
 
 import requests
-
+from PIL import Image, ImageDraw
 from miridih_llava.constants import LOGDIR
 
 server_error_msg = "**NETWORK ERROR DUE TO HIGH TRAFFIC. PLEASE REGENERATE OR REFRESH THIS PAGE.**"
 moderation_msg = "YOUR INPUT VIOLATES OUR CONTENT MODERATION GUIDELINES. PLEASE TRY AGAIN."
 
 handler = None
+
+def merge_images(images):
+
+    bold_width = 3
+    N = len(images)
+
+    width, height = images[0].size
+
+    reverse_flag = True if width <= height else False
+    expand_w, expand_h = (N, 1) if reverse_flag else (1, N)
+
+    total_width = width * expand_w
+    total_height = height * expand_h
+
+    canvas_size = (total_width+(bold_width*N), total_height) if reverse_flag else (total_width, total_height+(bold_width*N))
+    merged_image = Image.new('RGBA', canvas_size)
+
+    x_offset = 0
+
+    for img in images:
+        draw = ImageDraw.Draw(img)
+        width, height = img.size
+        draw.rectangle([(0, 0), (width-1, height-1)], outline="black", width=bold_width)
+        paste_offset = (x_offset, 0) if reverse_flag else (0, x_offset)
+        merged_image.paste(img, paste_offset)
+
+        add_off_set = (img.width + bold_width) if reverse_flag else (img.height + bold_width)
+        x_offset += add_off_set
+
+    return merged_image
 
 
 def build_logger(logger_name, logger_filename):

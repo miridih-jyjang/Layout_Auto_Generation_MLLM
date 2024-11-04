@@ -22,7 +22,8 @@ import logging
 import pathlib
 from typing import Dict, Optional, Sequence, List
 import torch
-import wandb
+import wandb, random
+import numpy as np
 import transformers
 # import datasets
 from miridih_llava.constants import IGNORE_INDEX, MAX_ELE_NUM_CRELLO, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
@@ -781,6 +782,8 @@ class DataCollatorForSupervisedDataset_v6_4(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids, labels, pixel_values = tuple([instance[key] for instance in instances]
                                   for key in ("input_ids", "labels", "pixel_values"))
+
+                
         input_ids = self.pad_sequences(
             input_ids,
             max_len=self.tokenizer.model_max_length,
@@ -1047,7 +1050,18 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                                     data_path=data_args.data_path,
                                     ele_cache_path=data_args.ele_cache_path,
                                     data_args=data_args)
-        dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
+        if ',' in data_args.dev_data_path:
+            dev_data_path_list = data_args.dev_data_path.split(',')
+            dev_dataset = {}
+            for dev_data_path in dev_data_path_list:
+                key_task = os.path.basename(dev_data_path).split('.')[0].split('_')[1]
+                temp  = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
+                                    data_path=dev_data_path,
+                                    ele_cache_path=data_args.eval_ele_cache_path,
+                                    data_args=data_args)
+                dev_dataset.update({key_task: temp})
+        else:
+            dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.dev_data_path,
                                     ele_cache_path=data_args.eval_ele_cache_path,
                                     data_args=data_args)
@@ -1055,7 +1069,18 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
         train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.data_path,
                                     data_args=data_args)
-        dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
+        if ',' in data_args.dev_data_path:
+            dev_data_path_list = data_args.dev_data_path.split(',')
+            dev_dataset = {}
+            for dev_data_path in dev_data_path_list:
+                key_task = os.path.basename(dev_data_path).split('.')[0].split('_')[1]
+                temp  = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
+                                    data_path=dev_data_path,
+                                    ele_cache_path=data_args.eval_ele_cache_path,
+                                    data_args=data_args)
+                dev_dataset.update({key_task: temp})
+        else:
+            dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.dev_data_path,
                                     data_args=data_args)
     if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version or 'v6.7' in data_args.data_version:
@@ -1070,9 +1095,18 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
                 eval_dataset=dev_dataset,
                 data_collator=data_collator)
 
+def set_seed(seed):
+    random.seed(seed)                    # Python random module
+    np.random.seed(seed)                  # NumPy
+    torch.manual_seed(seed)               # PyTorch CPU
+    torch.cuda.manual_seed(seed)          # PyTorch GPU (if using CUDA)
+    torch.cuda.manual_seed_all(seed)      # For multi-GPU (if using CUDA)
+    torch.backends.cudnn.deterministic = True   # Use deterministic algorithms
+    torch.backends.cudnn.benchmark = False      # Disable for reproducibility
 
 def train():
     global local_rank
+    set_seed(42)
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
@@ -1080,6 +1114,7 @@ def train():
         wandb.init(project='posterLlava-crello-instruction')
     else:
         print("experiment: ", training_args.exp_name)
+        # wandb.init(project='posterLlava-crello-instruction', name=training_args.exp_name, id="w8s2emkl", resume="allow")
         wandb.init(project='posterLlava-crello-instruction', name=training_args.exp_name)
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
@@ -1206,7 +1241,8 @@ def train():
             )
     elif model_args.version == "v0.5":
         tokenizer.pad_token = tokenizer.unk_token
-    elif model_args.version == "v6.7":
+    elif model_args.version == "v1" and (data_args.data_version == "v6.7" or data_args.data_version == "v6.8"):
+        print("new added tokens are added properly")
         tokenizer.pad_token = tokenizer.unk_token
         if model_args.version in conversation_lib.conv_templates:
             conversation_lib.default_conversation = conversation_lib.conv_templates[model_args.version]
@@ -1219,6 +1255,7 @@ def train():
                 tokenizer=tokenizer,
                 model=model,
             )
+        print("tokenizer length: ", len(tokenizer))
 
     else:
         tokenizer.pad_token = tokenizer.unk_token
