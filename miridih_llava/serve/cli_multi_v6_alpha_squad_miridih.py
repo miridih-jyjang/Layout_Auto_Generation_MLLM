@@ -118,11 +118,16 @@ def draw_box(img, elems, cls2color, data_path):
     # draw_ol = ImageDraw.ImageDraw(drawn_outline)
     # draw_f = ImageDraw.ImageDraw(drawn_fill)
     for file_name, clss, box, layer in elems:
-        
-        template_id, page_num, ele_num = file_name.split('.')[0].split('_')
+        if 'raw' in file_name:
+            template_id, _, page_num, ele_num = file_name.split('.')[0].split('_')
+        else:
+            template_id, page_num, ele_num = file_name.split('.')[0].split('_')
         template_id = int(template_id)
         page_num = int(page_num)
-        image_file = f"{data_path}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num:01}.png"
+        if 'raw' in file_name:
+            image_file = f"{data_path}/alpha_squad_raw/images/{template_id:08}/{page_num}/{template_id:08}_raw_{page_num:01}_{ele_num:01}.png"
+        else:
+            image_file = f"{data_path}/alpha_squad/images/{template_id:08}/{page_num}/{template_id:08}_{page_num:01}_{ele_num:01}.png"
             
         overlay_img = Image.open(image_file).convert("RGBA")
         # color = cls2color[clss.lower()]
@@ -147,7 +152,7 @@ def draw_box(img, elems, cls2color, data_path):
 
 def draw_boxmap(json_response, valid_eles, invalid_eles, background_image, cls2color, data_path):
     ele_num = min(len(json_response), len(valid_eles))
-    inval_cls_box = [(invalid_ele['file_name'], invalid_ele['label'], [invalid_ele['x1'], invalid_ele['y1'], invalid_ele['x2'], invalid_ele['y2']], invalid_ele['layer']) for invalid_ele in invalid_eles]
+    inval_cls_box = [(invalid_ele['file_name'], invalid_ele['label'], [invalid_ele['x1'], invalid_ele['y1'], invalid_ele['w'], invalid_ele['h']], invalid_ele['layer']) for invalid_ele in invalid_eles]
     cls_box = [(valid_ele['file_name'], elem['label'], elem['box'], elem['layer']) for valid_ele, elem in zip(valid_eles[:ele_num], json_response[:ele_num])]
     cls_box = cls_box + inval_cls_box
     
@@ -168,21 +173,27 @@ def load_image(image_file):
 
 def online_rendering(image_folder, skin_img_file, annotations, i_entry, args, task):
     rendering_image = Image.open(os.path.join(image_folder, skin_img_file))
-    # W, H = rendering_image.size
-    W, H = 1920, 1080
+    W, H = rendering_image.size
+    # W, H = 1920, 1080
     # merge_image = Image.new("RGBA", rendering_image.size)
     merge_image = Image.new("RGBA", (W, H))
     # img_width, img_height = rendering_image.size
     img_width, img_height = W, H
     for idx, anno in enumerate(annotations):
         ele_img_file = anno['file_name']
-        template_id, page_num, ele_num = ele_img_file.split('.')[0].split('_')
+        if 'raw' in ele_img_file:
+            template_id, _, page_num, ele_num = ele_img_file.split('.')[0].split("_")
+        else:
+            template_id, page_num, ele_num = ele_img_file.split('.')[0].split('_')
         template_id = int(template_id)
         page_num = int(page_num)
-        image_file = f"{image_folder}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num}.png"
+        if 'raw' in ele_img_file:
+            image_file = f"{image_folder}/alpha_squad_raw/images/{template_id:08}/{page_num}/{template_id:08}_raw_{page_num:01}_{ele_num}.png"
+        else:
+            image_file = f"{image_folder}/alpha_squad/images/{template_id:08}/{page_num}/{template_id:08}_{page_num:01}_{ele_num}.png"
         
         overlay_img = Image.open(image_file).convert("RGBA")
-        ele_width, ele_height = W*(float(anno['x2'])-float(anno['x1'])), H*(float(anno['y2']) - float(anno['y1']))
+        ele_width, ele_height = W*(float(anno['w'])), H*(float(anno['h']))
             
         x_offset, y_offset = W*float(anno['x1']), H*float(anno['y1'])
         overlay_img = overlay_img.resize((max(1, round(ele_width)), max(1,round(ele_height))))
@@ -190,8 +201,11 @@ def online_rendering(image_folder, skin_img_file, annotations, i_entry, args, ta
         rendering_image.paste(overlay_img, (int(x_offset), int(y_offset)), overlay_img_mask)
         merge_image = Image.alpha_composite(merge_image, rendering_image)
         
-    if args.debug and len(annotations) > 0 and i_entry < 10:    
-        image_file = f"data/ca_squad/images/{page_num:03}/{template_id:08}/{template_id}_{page_num}_01.png"
+    if args.debug and len(annotations) > 0 and i_entry < 10: 
+        if 'raw' in ele_img_file:
+            image_file = f"data/alpha_squad_raw/images/{page_num}/{template_id:08}/{template_id}_raw_{page_num}_01.png"
+        else:
+            image_file = f"data/alpha_squad/images/{page_num}/{template_id:08}/{template_id}_{page_num}_01.png"
         
         if (task == 'refine') or (task == 'complete'): # completion & refinement
             merge_image.convert('RGB').save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_{task}_input.jpg"))
@@ -221,8 +235,8 @@ def extract_elements(bbox_html):
                 category = match[0]
                 x1 = float(box[0])
                 y1 = float(box[1])
-                x2 = float(box[2])
-                y2 = float(box[3])
+                w = float(box[2])
+                h = float(box[3])
                 layer = match[2]
                 file_name = match[3]
                 if len(match) == 5:
@@ -232,8 +246,8 @@ def extract_elements(bbox_html):
                 category = match[0]
                 x1 = float(box[0])
                 y1 = float(box[1])
-                x2 = float(box[2])
-                y2 = float(box[3])
+                w = float(box[2])
+                h = float(box[3])
                 file_name = match[2]
                 if len(match) == 4:
                     src = match[3]
@@ -243,8 +257,8 @@ def extract_elements(bbox_html):
                 "label": category,
                 "x1": x1,
                 "y1": y1,
-                "x2": x2,
-                "y2": y2,
+                "w": w,
+                "h": h,
             }
             if 'layer' in bbox_html:
                 temp_dict["layer"] = layer
@@ -269,8 +283,8 @@ def extract_unmasked_elements(bbox_html):
                         "label": label,
                         "x1": box[0],
                         "y1": box[1],
-                        "x2": box[2],
-                        "y2": box[3],
+                        "w": box[2],
+                        "h": box[3],
                         "layer": layer
                     }  
                 )
@@ -286,8 +300,8 @@ def remove_elements(conversations, filenames):
                 label = filename_dict['label']
                 x1 = filename_dict['x1']
                 y1 = filename_dict['y1']
-                x2 = filename_dict['x2']
-                y2 = filename_dict['y2']
+                w = filename_dict['w']
+                h = filename_dict['h']
                 file_name = filename_dict['file_name']
 
                 if 'src' in filename_dict:
@@ -299,16 +313,16 @@ def remove_elements(conversations, filenames):
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.\d+),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.\d+)\],\s*'layer':\s*(" + re.escape(layer) + 
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.\d+),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.\d+)\],\s*'layer':\s*(" + re.escape(layer) + 
                                 r"|\d+),\s*\[IMG\d+\]:\s*'<image>',\s*'file_name':\s*'" + re.escape(file_name) +
                                 r"',\s*'src':\s*'" + re.escape(src) + r"'\}")
                         else:
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.\d+),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.\d+)\],\s*\[IMG\d+\]:\s*'<image>',\s*'file_name':\s*'" + re.escape(file_name) +
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.\d+),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.\d+)\],\s*\[IMG\d+\]:\s*'<image>',\s*'file_name':\s*'" + re.escape(file_name) +
                                 r"',\s*'src':\s*'" + re.escape(src) + r"'\}")
                             
                     else:
@@ -317,16 +331,16 @@ def remove_elements(conversations, filenames):
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'layer':\s*(" +
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'layer':\s*(" +
                                 re.escape(layer) + r"|\d+),\s*'file_name':\s*'" + re.escape(file_name) +
                                 r"',\s*'src':\s*'" + re.escape(src) + r"'\}\n")
                         else:
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'file_name':\s*'" + re.escape(file_name) +
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'file_name':\s*'" + re.escape(file_name) +
                                 r"',\s*'src':\s*'" + re.escape(src) + r"'\}\n")
                             
                 
@@ -350,15 +364,15 @@ def remove_elements(conversations, filenames):
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'layer':\s*(" + re.escape(layer) + 
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'layer':\s*(" + re.escape(layer) + 
                                 r"|\d*|''),\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
                         else:
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
 
             else:
                 img_ref = filename_dict['src']       # This is the image reference (e.g., "[IMG1]", "[IMG2]")
@@ -479,11 +493,20 @@ def main(args):
         pixel_values = []
         for element in valid_filenames:
             element = element['file_name']
-            template_id, page_num, ele_num = element.split('.')[0].split('_')
+            if 'raw' in element:
+                template_id, _, page_num, ele_num = element.split('.')[0].split('_')
+                image_file = f"data/alpha_squad_raw/images/{page_num}/{template_id:08}/{template_id}_raw_{page_num}_01.png"
+            else:
+                template_id, page_num, ele_num = element.split('.')[0].split('_')
+                image_file = f"data/alpha_squad/images/{page_num}/{template_id:08}/{template_id}_{page_num}_01.png"
             template_id = int(template_id)
             page_num = int(page_num)
             ele_num = int(ele_num)
-            ele_file_path = os.path.join(args.data_path, 'ca_squad/images', f"{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num:01}.png")
+            
+            if 'raw' in element:
+                ele_file_path = os.path.join(args.data_path, 'alpha_squad_raw/images', f"{template_id:08}/{page_num}/{template_id:08}_raw_{page_num:01}_{ele_num:01}.png")
+            else:
+                ele_file_path = os.path.join(args.data_path, 'alpha_squad/images', f"{template_id:08}/{page_num}/{template_id:08}_{page_num:01}_{ele_num:01}.png")
             ele_img = Image.open(ele_file_path).convert('RGB')
             pixel_values.append(ele_img)  
         try:
@@ -505,13 +528,22 @@ def main(args):
         page_num = int(page_num)
         
         if ('refine' in entry['image']) or ('complete' in entry['image']):
-            image_file = f"ca_squad/images/{page_num}_{page_num}_1.png"
+            if 'raw' in element:
+                image_file = f"alpha_squad_raw/images/{template_id:08}/{page_num}/{template_id}_raw_{page_num}_Skin.png"
+            else:
+                image_file = f"alpha_squad/images/{template_id:08}/{page_num}/{template_id}_{page_num}_Skin.png"
             image = online_rendering(args.data_path, image_file, merged_filelist, i_entry, args, entry['image']).convert('RGB')
         else:
-            if os.path.isfile(f"{args.data_path}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_1.png"):
-                image_file = f"ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_1.png"
+            if 'raw' in element:
+                if os.path.isfile(f"{args.data_path}/alpha_squad_raw/images/{template_id:08}/{page_num}/{template_id}_raw_{page_num}_Skin.png"):
+                    image_file = f"alpha_squad_raw/images/{template_id:08}/{page_num}/{template_id}_raw_{page_num}_Skin.png"
+                else:
+                    image_file = f"alpha_squad_raw/images/{template_id:08}/{page_num}/{template_id}_{page_num}_Thumbnail.png"
             else:
-                image_file = f"ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_0.png"
+                if os.path.isfile(f"{args.data_path}/alpha_squad/images/{template_id:08}/{page_num}/{template_id}_raw_{page_num}_Skin.png"):
+                    image_file = f"alpha_squad/images/{template_id:08}/{page_num}/{template_id}_raw_{page_num}_Skin.png"
+                else:
+                    image_file = f"alpha_squad/images/{template_id:08}/{page_num}/{template_id}_{page_num}_Thumbnail.png"
 
             if len(invalid_filenames) > 0:
                 image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args, entry['image']).convert('RGB')
@@ -584,7 +616,7 @@ def main(args):
 
             if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"input_complete/{template_id}_{page_num}.jpg")):
                 try:
-                    thumbnail_image_file = os.path.join(args.data_path, image_file.replace('_1.png', '_0.png'))
+                    thumbnail_image_file = os.path.join(args.data_path, image_file.replace('_Skin.png', '_Thumbnail.png'))
                     thumbnail_img = Image.open(thumbnail_image_file).convert('RGB')
                     thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_{page_num}.jpg"))
                     # image.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"input_complete/{template_id}_{page_num}.jpg"))

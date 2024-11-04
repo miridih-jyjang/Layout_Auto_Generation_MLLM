@@ -1018,6 +1018,8 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
     elif 'v6.6' in data_args.data_version:
         if 'miridih' in data_args.data_path:
             from miridih_llava.data.lazyRealtimeRender_v6_6 import LazyRealTimeRenderingDataset
+        elif 'crello' in data_args.data_path:
+            from miridih_llava.data.lazyRealtimeRender_v6_6_crello import LazyRealTimeRenderingDataset
     elif 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version:
         if 'miridih' in data_args.data_path:
             from miridih_llava.data.lazyRealtimeRender_v6_4 import LazyRealTimeRenderingDataset
@@ -1045,7 +1047,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
             from miridih_llava.data.lazyRealtimeRender_v3_crello import LazyRealTimeRenderingDataset
     else:
         print("error for version")
-    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version or 'v6.7' in data_args.data_version:
+    if 'v6.4' in data_args.data_version or 'v6.5' in data_args.data_version or 'v6.6' in data_args.data_version or 'v6.7' in data_args.data_version:
         train_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.data_path,
                                     ele_cache_path=data_args.ele_cache_path,
@@ -1073,12 +1075,12 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
             dev_data_path_list = data_args.dev_data_path.split(',')
             dev_dataset = {}
             for dev_data_path in dev_data_path_list:
-                key_task = os.path.basename(dev_data_path).split('.')[0].split('_')[1]
+                key_task = dev_data_path.split('.')[0].split('_')[1]
                 temp  = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=dev_data_path,
                                     ele_cache_path=data_args.eval_ele_cache_path,
                                     data_args=data_args)
-                dev_dataset.update({key_task: temp})
+                dev_dataset[key_task] = temp
         else:
             dev_dataset = LazyRealTimeRenderingDataset(tokenizer=tokenizer,
                                     data_path=data_args.dev_data_path,
@@ -1113,8 +1115,8 @@ def train():
     if training_args.exp_name == "":
         wandb.init(project='posterLlava-crello-instruction')
     else:
-        print("experiment: ", training_args.exp_name)
-        # wandb.init(project='posterLlava-crello-instruction', name=training_args.exp_name, id="w8s2emkl", resume="allow")
+        print("experiment: ", training_args.exp_name)                       
+        #wandb.init(project='posterLlava-crello-instruction', name=training_args.exp_name, id="2h10wcbv", resume="allow")
         wandb.init(project='posterLlava-crello-instruction', name=training_args.exp_name)
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))

@@ -6,7 +6,7 @@ import re
 from tqdm import tqdm
 from setproctitle import setproctitle
 # Need to call this before importing transformers.
-import sys
+import sys, wandb 
 sys.path.append("/workspace/Layout_Auto_Generation_MLLM")  
 # from miridih_llava.train.llama_flash_attn_monkey_patch import replace_llama_attn_with_flash_attn
 # replace_llama_attn_with_flash_attn()
@@ -23,16 +23,12 @@ from io import BytesIO
 from transformers import TextStreamer
 
 bbox_extract =     re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)'")
-bbox_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*([\d]+),\s*'file_name':\s*'([^']*)'")
+bbox_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'file_name':\s*'([^']*)'")
 bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
-bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.]+|''),\s*([-\d.]+|''),\s*([-\d.]+|''),\s*([-\d.]+|''\s*)\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
-bbox_layer_IMG_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.]+|''),\s*([-\d.]+|''),\s*([-\d.]+|''),\s*([-\d.]+|''\s*)\],\s*'layer':\s*([\d.]+),\s*'\[IMG(\d+)\]':\s*'<image>',\s*'file_name':\s*'([^']*)'")
-
+bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
+bbox_layer_IMG_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'\[IMG(\d+)\]':\s*'<image>',\s*'file_name':\s*'([^']*)'")
 bbox_extract_wo_filename = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'src':\s*'([^']*)'")
-bbox_extract_wo_src_filename = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+)")
-                                          
-
-resolution_pattern = r"\[([0-9]+),([0-9]+)\]"
+from setproctitle import setproctitle
 
 CLS2COLOR = {
     # "Miridih": {
@@ -97,16 +93,10 @@ def stringTojson_v6(s):
 
         return s
     # Find all rect elements and their attributes within the SVG body
-    if 'src' in s:
-        rects = bbox_extract_wo_filename.findall(s)
-    else:
-        rects = bbox_extract_wo_src_filename.findall(s)
+    rects = bbox_extract_wo_filename.findall(s)
     output = []
     for rect in rects:
-        if len(rect) == 4:
-            output.append({'label': rect[0], 'box': [clean_float_string(r) for r in rect[1].split(',')], 'layer': rect[2], 'src': rect[3]})
-        else:
-            output.append({'label': rect[0], 'box': [clean_float_string(r) for r in rect[1].split(',')], 'layer': rect[2]})
+        output.append({'label': rect[0], 'box': [clean_float_string(r) for r in rect[1].split(',')], 'layer': rect[2], 'src': rect[3]})
     
     return output
 
@@ -118,21 +108,16 @@ def draw_box(img, elems, cls2color, data_path):
     # draw_ol = ImageDraw.ImageDraw(drawn_outline)
     # draw_f = ImageDraw.ImageDraw(drawn_fill)
     for file_name, clss, box, layer in elems:
-        
-        template_id, page_num, ele_num = file_name.split('.')[0].split('_')
-        template_id = int(template_id)
+        template_id, page_num = file_name.split('/')[-1].split('.')[0].split('_')
         page_num = int(page_num)
-        image_file = f"{data_path}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num:01}.png"
-            
+        image_file = f"{data_path}/crello-v6/{file_name}"
         overlay_img = Image.open(image_file).convert("RGBA")
         # color = cls2color[clss.lower()]
         try:
-            # left, top, right, bottom = float(box[0]), float(box[1]), float(box[2]), float(box[3])
-            left, top, width, height = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+            left, top, right, bottom = float(box[0]), float(box[1]), float(box[2]), float(box[3])
         except:
             continue
-        # ele_width, ele_height = W*(right-left), H*(bottom-top)
-        ele_width, ele_height = W*(width), H*(height)
+        ele_width, ele_height = W*(right-left), H*(bottom-top)
         overlay_img = overlay_img.resize((max(1, round(ele_width)), max(1,round(ele_height))))
         _, _, _, overlay_img_mask = overlay_img.split()
         rendering_image.paste(overlay_img, (int(left*W), int(top*H)), overlay_img_mask)
@@ -143,14 +128,20 @@ def draw_box(img, elems, cls2color, data_path):
     # drawn_outline = drawn_outline.convert("RGBA")
     # drawn = Image.alpha_composite(drawn_outline, drawn_fill)
     return merge_image
+def sort_key(item):
+    # Split the path and file name, then extract the number after the last underscore and before .png
+    layer = item[3]  # Get file name (e.g., '5953615d95a7a863ddce1423_4.png')
+    file_name = item[0]
+    number = int(layer)  # Extract '4' as integer
+    return (number, file_name)
 
 
 def draw_boxmap(json_response, valid_eles, invalid_eles, background_image, cls2color, data_path):
     ele_num = min(len(json_response), len(valid_eles))
-    inval_cls_box = [(invalid_ele['file_name'], invalid_ele['label'], [invalid_ele['x1'], invalid_ele['y1'], invalid_ele['x2'], invalid_ele['y2']], invalid_ele['layer']) for invalid_ele in invalid_eles]
+    inval_cls_box = [(invalid_ele['file_name'], invalid_ele['label'], [invalid_ele['x1'], invalid_ele['y1'], invalid_ele['w'], invalid_ele['h']], invalid_ele['layer']) for invalid_ele in invalid_eles]
     cls_box = [(valid_ele['file_name'], elem['label'], elem['box'], elem['layer']) for valid_ele, elem in zip(valid_eles[:ele_num], json_response[:ele_num])]
     cls_box = cls_box + inval_cls_box
-    
+    cls_box = sorted(cls_box, key=sort_key)
 
     # print(cls_box)
     drawn = draw_box(background_image, cls_box, cls2color, data_path)
@@ -168,21 +159,16 @@ def load_image(image_file):
 
 def online_rendering(image_folder, skin_img_file, annotations, i_entry, args, task):
     rendering_image = Image.open(os.path.join(image_folder, skin_img_file))
-    # W, H = rendering_image.size
-    W, H = 1920, 1080
-    # merge_image = Image.new("RGBA", rendering_image.size)
-    merge_image = Image.new("RGBA", (W, H))
-    # img_width, img_height = rendering_image.size
-    img_width, img_height = W, H
+    W, H = rendering_image.size
+    merge_image = Image.new("RGBA", rendering_image.size)
+    img_width, img_height = rendering_image.size
     for idx, anno in enumerate(annotations):
         ele_img_file = anno['file_name']
-        template_id, page_num, ele_num = ele_img_file.split('.')[0].split('_')
-        template_id = int(template_id)
-        page_num = int(page_num)
-        image_file = f"{image_folder}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num}.png"
-        
+        template_id = ele_img_file.split('/')[-1].split('_')[0]
+        page_num = 0
+        image_file = f"{image_folder}/crello-v6/{ele_img_file}"
         overlay_img = Image.open(image_file).convert("RGBA")
-        ele_width, ele_height = W*(float(anno['x2'])-float(anno['x1'])), H*(float(anno['y2']) - float(anno['y1']))
+        ele_width, ele_height = W*float(anno['w']), H*float(anno['h'])
             
         x_offset, y_offset = W*float(anno['x1']), H*float(anno['y1'])
         overlay_img = overlay_img.resize((max(1, round(ele_width)), max(1,round(ele_height))))
@@ -191,13 +177,13 @@ def online_rendering(image_folder, skin_img_file, annotations, i_entry, args, ta
         merge_image = Image.alpha_composite(merge_image, rendering_image)
         
     if args.debug and len(annotations) > 0 and i_entry < 10:    
-        image_file = f"data/ca_squad/images/{page_num:03}/{template_id:08}/{template_id}_{page_num}_01.png"
+        image_file = f"data/crello-v6/images/{template_id}_0.png"
         
         if (task == 'refine') or (task == 'complete'): # completion & refinement
             merge_image.convert('RGB').save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_{task}_input.jpg"))
-        # if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id}_{page_num}_thumbnail.jpg")): # conditional
-        #     thumbnail_img = Image.open(image_file).convert('RGB')
-        #     thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id}_{page_num}_thumbnail.jpg"))
+        if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_thumbnail.jpg")): # conditional
+            thumbnail_img = Image.open(image_file).convert('RGB')
+            thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{template_id:08}_{page_num:01}_thumbnail.jpg"))
     return merge_image
 
 def extract_elements(bbox_html):
@@ -221,8 +207,8 @@ def extract_elements(bbox_html):
                 category = match[0]
                 x1 = float(box[0])
                 y1 = float(box[1])
-                x2 = float(box[2])
-                y2 = float(box[3])
+                w = float(box[2])
+                h = float(box[3])
                 layer = match[2]
                 file_name = match[3]
                 if len(match) == 5:
@@ -232,8 +218,8 @@ def extract_elements(bbox_html):
                 category = match[0]
                 x1 = float(box[0])
                 y1 = float(box[1])
-                x2 = float(box[2])
-                y2 = float(box[3])
+                w = float(box[2])
+                h = float(box[3])
                 file_name = match[2]
                 if len(match) == 4:
                     src = match[3]
@@ -243,8 +229,8 @@ def extract_elements(bbox_html):
                 "label": category,
                 "x1": x1,
                 "y1": y1,
-                "x2": x2,
-                "y2": y2,
+                "w": w,
+                "h": h,
             }
             if 'layer' in bbox_html:
                 temp_dict["layer"] = layer
@@ -258,20 +244,18 @@ def extract_unmasked_elements(bbox_html):
         matches = bbox_layer_IMG_extract.findall(bbox_html)
         file_attributes = []
         for match in matches:
-            label, left, top, right, bottom, layer, img_num, file_name = match
-            # Convert empty strings in bounding boxes to None, otherwise convert to float
-            box = [left, top, right, bottom]
+            box = match[1].split(',')
             if "''" in box:
                 continue
             file_attributes.append(
                     {
-                        "file_name": file_name,
-                        "label": label,
+                        "file_name": match[4],
+                        "label": match[0],
                         "x1": box[0],
                         "y1": box[1],
-                        "x2": box[2],
-                        "y2": box[3],
-                        "layer": layer
+                        "w": box[2],
+                        "h": box[3],
+                        "layer": match[2],
                     }  
                 )
 
@@ -286,8 +270,8 @@ def remove_elements(conversations, filenames):
                 label = filename_dict['label']
                 x1 = filename_dict['x1']
                 y1 = filename_dict['y1']
-                x2 = filename_dict['x2']
-                y2 = filename_dict['y2']
+                w = filename_dict['w']
+                h = filename_dict['h']
                 file_name = filename_dict['file_name']
 
                 if 'src' in filename_dict:
@@ -299,16 +283,16 @@ def remove_elements(conversations, filenames):
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.\d+),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.\d+)\],\s*'layer':\s*(" + re.escape(layer) + 
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.\d+),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.\d+)\],\s*'layer':\s*(" + re.escape(layer) + 
                                 r"|\d+),\s*\[IMG\d+\]:\s*'<image>',\s*'file_name':\s*'" + re.escape(file_name) +
                                 r"',\s*'src':\s*'" + re.escape(src) + r"'\}")
                         else:
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.\d+),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.\d+),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.\d+)\],\s*\[IMG\d+\]:\s*'<image>',\s*'file_name':\s*'" + re.escape(file_name) +
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.\d+),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.\d+)\],\s*\[IMG\d+\]:\s*'<image>',\s*'file_name':\s*'" + re.escape(file_name) +
                                 r"',\s*'src':\s*'" + re.escape(src) + r"'\}")
                             
                     else:
@@ -317,16 +301,16 @@ def remove_elements(conversations, filenames):
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'layer':\s*(" +
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'layer':\s*(" +
                                 re.escape(layer) + r"|\d+),\s*'file_name':\s*'" + re.escape(file_name) +
                                 r"',\s*'src':\s*'" + re.escape(src) + r"'\}\n")
                         else:
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'file_name':\s*'" + re.escape(file_name) +
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'file_name':\s*'" + re.escape(file_name) +
                                 r"',\s*'src':\s*'" + re.escape(src) + r"'\}\n")
                             
                 
@@ -350,15 +334,15 @@ def remove_elements(conversations, filenames):
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'layer':\s*(" + re.escape(layer) + 
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'layer':\s*(" + re.escape(layer) + 
                                 r"|\d*|''),\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
                         else:
                             removal_pattern = (r"\{'label':\s*'" + re.escape(label) +
                                 r"',\s*'box':\s*\[\s*(" + re.escape(format(x1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
                                 re.escape(format(y1, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(x2, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
-                                re.escape(format(y2, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
+                                re.escape(format(w, '.4f')) + r"|''|\d*\.?\d{0,4}),\s*(" +
+                                re.escape(format(h, '.4f')) + r"|''|\d*\.?\d{0,4})\s*\],\s*'file_name':\s*'" + re.escape(file_name) + r"'\}")
 
             else:
                 img_ref = filename_dict['src']       # This is the image reference (e.g., "[IMG1]", "[IMG2]")
@@ -431,11 +415,20 @@ def pad_images(image, max_length):
 
 def main(args):
     setproctitle('jooyoung-jang')
+    task = os.path.basename(args.json_file).split('.')[0]
+    
+    if args.exp_name != None and args.id != None:
+        wandb.init(project='posterLlava-crello-instruction', name=args.exp_name, id=args.id, resume="allow")
+        columns = ['Canvas Input', 'Rendered Thumbnail', "Rendered Prediction"]
+        table = wandb.Table(columns=columns)
+
     # Model
     disable_torch_init()
 
     model_name = get_model_name_from_path(args.model_path)
     tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name)
+    with open(args.ele_cache_path, 'r') as f:
+        ele_cache = json.load(f)
     
     if 'llama-2' in model_name.lower():
         conv_mode = "llava_llama_2"
@@ -459,16 +452,13 @@ def main(args):
 
     data = json.load(open(args.json_file, 'r', encoding='utf-8'))
     ret, gt = {}, {}
-    
+    merge_image_list = []
     os.makedirs(os.path.join('/'.join(args.output_file.split('/')[:-1]), 'gt'), exist_ok=True)
-    os.makedirs(os.path.join('/'.join(args.output_file.split('/')[:-1]), 'input_complete'), exist_ok=True)
     os.makedirs(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{args.output_file.split('/')[-1].replace('.json', '')}"), exist_ok=True)
     # streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
     erase_file_name = r",\s*'file_name':\s*'[^']*'"
     
-
     for i_entry, entry in enumerate(tqdm(data, desc="Processing entries")):
-        
         if entry['id'] not in ret:
             ret[entry['id']] = []
             gt[entry['id']] = []
@@ -478,21 +468,13 @@ def main(args):
         invalid_filenames, valid_filenames = extract_elements(entry['conversations'][1]['value'])
         pixel_values = []
         for element in valid_filenames:
-            element = element['file_name']
-            template_id, page_num, ele_num = element.split('.')[0].split('_')
-            template_id = int(template_id)
-            page_num = int(page_num)
-            ele_num = int(ele_num)
-            ele_file_path = os.path.join(args.data_path, 'ca_squad/images', f"{template_id:08}/{page_num:03}/{template_id:08}_{page_num:01}_{ele_num:01}.png")
-            ele_img = Image.open(ele_file_path).convert('RGB')
-            pixel_values.append(ele_img)  
+            ele_file = os.path.basename(element['file_name'])
+            pixel_values.append(ele_cache[ele_file]) 
         try:
-            ele_img_tensor = process_images(pixel_values, image_processor, args)
-            img_mask = torch.ones(ele_img_tensor.shape[0]).bool().to(model.device)
+            img_mask = torch.ones(len(pixel_values)).bool().to(model.device)
         except:
             print("Empty element images in ", entry['id'])
             continue        
-        ele_img_tensor = ele_img_tensor.to(model.device, dtype=torch.float16)
         merged_filelist = merge_lists_without_overlap(extract_unmasked_elements(entry['conversations'][0]['value']), invalid_filenames)
 
         if "mpt" in model_name.lower():
@@ -501,18 +483,13 @@ def main(args):
             roles = conv.roles
 
         template_id, page_num = entry['id'].split('_')
-        template_id = int(template_id)
         page_num = int(page_num)
         
         if ('refine' in entry['image']) or ('complete' in entry['image']):
-            image_file = f"ca_squad/images/{page_num}_{page_num}_1.png"
+            image_file = f"crello-v6/images/{template_id}_1.png"
             image = online_rendering(args.data_path, image_file, merged_filelist, i_entry, args, entry['image']).convert('RGB')
         else:
-            if os.path.isfile(f"{args.data_path}/ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_1.png"):
-                image_file = f"ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_1.png"
-            else:
-                image_file = f"ca_squad/images/{template_id:08}/{page_num:03}/{template_id}_{page_num}_0.png"
-
+            image_file = f"crello-v6/images/{template_id}_1.png"
             if len(invalid_filenames) > 0:
                 image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args, entry['image']).convert('RGB')
             else:
@@ -559,11 +536,14 @@ def main(args):
         keywords = [stop_str]
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
+        ele_img_tensors = torch.tensor(pixel_values).to(image_tensor.device)
+        ele_img_tensors = ele_img_tensors.to(torch.float16)  # Converts to float16 (half precision)
+
         with torch.inference_mode():
             output_ids = model.generate(
                 input_ids,
                 images=image_tensor,
-                pixel_values=ele_img_tensor.unsqueeze(0),
+                pixel_values=ele_img_tensors.unsqueeze(0),
                 img_mask=img_mask.unsqueeze(0),
                 do_sample=True,
                 temperature=args.temperature,
@@ -576,21 +556,21 @@ def main(args):
         ret[entry['id']].append(stringTojson_v6(outputs))
         gt[entry['id']].append(stringTojson_v6(entry['conversations'][1]['value']))
         if args.debug or args.image_out:
-            # for r in ret[entry['id']][-1]:
-                # for v in valid_filenames:
-                #     if v['src'] == r['src']:
-                #         r['file_name'] = v['file_name']
-                #         break
+            for r in ret[entry['id']][-1]:
+                for v in valid_filenames:
+                    if v['src'] == r['src']:
+                        r['file_name'] = v['file_name']
+                        break
 
-            if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"input_complete/{template_id}_{page_num}.jpg")):
+            if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_{page_num:01}.jpg")):
                 try:
-                    thumbnail_image_file = os.path.join(args.data_path, image_file.replace('_1.png', '_0.png'))
+                    thumbnail_image_file = f"{args.data_path}/crello-v6/images/{template_id}_0.png"
                     thumbnail_img = Image.open(thumbnail_image_file).convert('RGB')
-                    thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_{page_num}.jpg"))
-                    # image.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"input_complete/{template_id}_{page_num}.jpg"))
+                    thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_{page_num:01}.jpg"))
                 except:
-                    print("{} is not existing!!".format(f"{template_id}_{page_num}.jpg"))
+                    print("{} is not existing!!".format(f"{template_id:08}_{page_num:01}.jpg"))
             if entry['image'] == 'refine': # refinement
+                image_file = f"crello-v6/images/{template_id}_1.png"
                 if len(invalid_filenames) > 0:
                     args.debug = False
                     image = online_rendering(args.data_path, image_file, invalid_filenames, i_entry, args, entry['image']).convert('RGB')
@@ -598,15 +578,21 @@ def main(args):
                 else:
                     image = Image.open(os.path.join(args.data_path, image_file)).convert('RGB')
             if "posterllava/posterllava_v0" in args.model_path:
-                drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["QB"], args.data_path)  # Adjust the category as needed
+                rendered_pred_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, image, CLS2COLOR["QB"], args.data_path)  # Adjust the category as needed
             else:
                 inv_filenames = [f['file_name'] for f in invalid_filenames]
-                drawn_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, invalid_filenames, image, CLS2COLOR["Miridih"], args.data_path)  # Adjust the category as needed
-            drawn_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{args.output_file.split('/')[-1].replace('.json', '')}/{template_id}_{page_num}.jpg"))
+                rendered_pred_img = draw_boxmap(ret[entry['id']][-1], valid_filenames, invalid_filenames, image, CLS2COLOR["Crello"], args.data_path)  # Adjust the category as needed
+                rendered_gt_img = draw_boxmap(gt[entry['id']][-1], valid_filenames, invalid_filenames, image, CLS2COLOR["Crello"], args.data_path)  # Adjust the category as needed
+            rendered_pred_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"{args.output_file.split('/')[-1].replace('.json', '')}/{entry['id']}.jpg"))
+            merge_image_list.append((rendered_gt_img, image, rendered_pred_img, sample_id))
                 
-            
-                
+    if args.exp_name != None and args.id != None:
+        for thumbnail_image, input_canvas, rendered_pred, sample_id in merge_image_list:
+            table.add_data(wandb.Image(input_canvas, caption=sample_id), wandb.Image(thumbnail_image, caption=sample_id), wandb.Image(rendered_pred, caption=sample_id))
 
+        wandb.log({task: table})
+
+    wandb.finish()
 
     with open(args.output_file, 'w', encoding='utf-8') as fout:
         json.dump(ret, fout, ensure_ascii=False, indent=2)
@@ -631,9 +617,9 @@ if __name__ == "__main__":
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--json-file", type=str, required=True)
     parser.add_argument("--num-gpus", type=int, default=1)
+    parser.add_argument("--ele_cache_path", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--image-out", action="store_true")
     args = parser.parse_args()
-    print("args: ", args)
     setproctitle('jooyoung-jang')
     main(args)

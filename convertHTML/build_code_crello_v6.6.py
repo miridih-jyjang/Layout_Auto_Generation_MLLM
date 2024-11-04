@@ -186,12 +186,12 @@ class CustomDataLoader(DataLoader):
             answer_notepad = ele_dict
             i = answer_notepad["src"]
             # result_string = {'file_name': ele_dict['file_name'], f'img{i}': ELE_IMAGE_TOKENS[i]}
-            result_string = f"image {i+1} is <image{i+1}> <image>."
+            result_string = f"image {i+1} is [IMG{i+1}] <image>."
             formatted_box = []
             for value in [ele_dict["x1"], ele_dict["y1"], ele_dict["w"], ele_dict["h"]]:
-                formatted_box.append(f"{value:.4f}")
+                formatted_box.append(f"{value:.3f}")
             label, file_name = ele_dict["label"], ele_dict["file_name"]
-            answer_notepad = f"{{'label': '{label}', 'box': [{', '.join(formatted_box)}], 'layer': {ele_dict['z']}, 'file_name': '{file_name}', 'src': '<image{i+1}>'}}"
+            answer_notepad = f"{{'label': '{label}', 'box': [{', '.join(formatted_box)}], 'layer': {ele_dict['z']}, 'file_name': '{file_name}', 'src': '[IMG{i+1}]'}}"
             return result_string, answer_notepad
         
         formatted_box = []
@@ -199,7 +199,7 @@ class CustomDataLoader(DataLoader):
             if value == PLACE_HOLDER:
                 formatted_box.append(value)
             else:
-                formatted_box.append(f"{value:.4f}")
+                formatted_box.append(f"{value:.3f}")
         label, file_name = ele_dict["label"], ele_dict["file_name"]
         result_string = f"{{'label': '{label}', 'box': [{', '.join(formatted_box)}], 'layer': {ele_dict['z']}, 'file_name': '{file_name}'}}"
         if type != "html_content":
@@ -264,7 +264,7 @@ class CustomDataLoader(DataLoader):
                     
                     real_category = self.category_map[category]
                     all_category[category] += 1
-                    ele_dict = {"label": real_category, "src": f"<image{i+1}>", "x1": round(x1/W, self.d), "y1":round(y1/H, self.d), "w":round(w/W, self.d), "h":round(h/H, self.d), "z":priority, "file_name": file_name}                    # ele_dict = {"label": real_category, "x": x, "y":y, "w":w, "h":h, "content":content}
+                    ele_dict = {"label": real_category, "src": f"[IMG{i+1}]", "x1": round(x1/W, self.d), "y1":round(y1/H, self.d), "w":round(w/W, self.d), "h":round(h/H, self.d), "z":priority, "file_name": file_name}                    # ele_dict = {"label": real_category, "x": x, "y":y, "w":w, "h":h, "content":content}
                     tmp1, tmp1_ = self.build_input_with_ele_dict(ele_dict, "html_content")
                     html_content.append(tmp1)
                     completion_html.append(tmp1_)
@@ -362,7 +362,7 @@ class CustomDataLoader(DataLoader):
                         refinement.append("\n".join(refinement_html))
                         
                         sorted_coord_pred_html = sorted(coord_pred_html, key=lambda x: int(x.split()[1]))
-                        sorted_coord_pred_html_ans = sorted(coord_pred_html_ans, key=lambda x: int(ast.literal_eval(x)['src'][6:-1]))
+                        sorted_coord_pred_html_ans = sorted(coord_pred_html_ans, key=lambda x: int(ast.literal_eval(x)['src'][4:-1]))
                         coord_pred.append("\n".join(sorted_coord_pred_html))
                         coord_pred_ans.append('\n'.join(sorted_coord_pred_html_ans))
                         
@@ -381,7 +381,7 @@ class CustomDataLoader(DataLoader):
                     completion.append("\n".join(completion_html[:extract_index]))
                     
                     sorted_coord_pred_html = sorted(coord_pred_html, key=lambda x: int(x.split()[1]))
-                    sorted_coord_pred_html_ans = sorted(coord_pred_html_ans, key=lambda x: int(ast.literal_eval(x)['src'][6:-1]))
+                    sorted_coord_pred_html_ans = sorted(coord_pred_html_ans, key=lambda x: int(ast.literal_eval(x)['src'][4:-1]))
                     coord_pred.append("\n".join(sorted_coord_pred_html))
                     # random_indices = random.sample(range(len(html_content)), extract_index)
                     # sorted_indices = sorted(random_indices)
