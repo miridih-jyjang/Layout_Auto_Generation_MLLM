@@ -472,8 +472,6 @@ def main(args):
     erase_file_name = r",\s*'file_name':\s*'[^']*'"
     
     for i_entry, entry in enumerate(tqdm(data, desc="Processing entries")):
-        if i_entry > 3:
-            break
         if entry['id'] not in ret:
             ret[entry['id']] = []
             gt[entry['id']] = []
