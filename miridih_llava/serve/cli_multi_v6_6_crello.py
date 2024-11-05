@@ -28,6 +28,7 @@ bbox_src_layer_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,
 bbox_src_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'file_name':\s*'([^']*)',\s*'src':\s*'([^']*)'")
 bbox_layer_IMG_extract = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'\[IMG(\d+)\]':\s*'<image>',\s*'file_name':\s*'([^']*)'")
 bbox_extract_wo_filename = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]*)\],\s*'layer':\s*(\d+),\s*'src':\s*'([^']*)'")
+bbox_extract_wo_filename_wo_src = re.compile(r"'label':\s*'([^']+)',\s*'box':\s*\[([-\d.,\s]+)\],\s*'layer':\s*(\d+)")
 from setproctitle import setproctitle
 
 CLS2COLOR = {
@@ -93,10 +94,15 @@ def stringTojson_v6(s):
 
         return s
     # Find all rect elements and their attributes within the SVG body
-    rects = bbox_extract_wo_filename.findall(s)
     output = []
-    for rect in rects:
-        output.append({'label': rect[0], 'box': [clean_float_string(r) for r in rect[1].split(',')], 'layer': rect[2], 'src': rect[3]})
+    if 'src' in s:
+        rects = bbox_extract_wo_filename.findall(s)
+        for rect in rects:
+            output.append({'label': rect[0], 'box': [clean_float_string(r) for r in rect[1].split(',')], 'layer': rect[2], 'src': rect[3]})
+    else:
+        rects = bbox_extract_wo_filename_wo_src.findall(s)
+        for rect in rects:
+            output.append({'label': rect[0], 'box': [clean_float_string(r) for r in rect[1].split(',')], 'layer': rect[2]}) 
     
     return output
 
@@ -114,10 +120,10 @@ def draw_box(img, elems, cls2color, data_path):
         overlay_img = Image.open(image_file).convert("RGBA")
         # color = cls2color[clss.lower()]
         try:
-            left, top, right, bottom = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+            left, top, width, height = float(box[0]), float(box[1]), float(box[2]), float(box[3])
         except:
             continue
-        ele_width, ele_height = W*(right-left), H*(bottom-top)
+        ele_width, ele_height = W*(width), H*(height)
         overlay_img = overlay_img.resize((max(1, round(ele_width)), max(1,round(ele_height))))
         _, _, _, overlay_img_mask = overlay_img.split()
         rendering_image.paste(overlay_img, (int(left*W), int(top*H)), overlay_img_mask)
@@ -427,8 +433,6 @@ def main(args):
 
     model_name = get_model_name_from_path(args.model_path)
     tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name)
-    with open(args.ele_cache_path, 'r') as f:
-        ele_cache = json.load(f)
     
     if 'llama-2' in model_name.lower():
         conv_mode = "llava_llama_2"
@@ -464,27 +468,30 @@ def main(args):
             gt[entry['id']] = []
 
         conv = conv_templates[args.conv_mode].copy()
-        
+        template_id, page_num = entry['id'].split('_')
+        page_num = int(page_num)
+        sample_id = f"{template_id}_{page_num}"
+
         invalid_filenames, valid_filenames = extract_elements(entry['conversations'][1]['value'])
         pixel_values = []
         for element in valid_filenames:
-            ele_file = os.path.basename(element['file_name'])
-            pixel_values.append(ele_cache[ele_file]) 
+            element = element['file_name']
+            template_id, ele_num = os.path.basename(element).split('.')[0].split('_')
+            ele_num = int(ele_num)
+            
+            ele_file_path = f"{args.data_path}/crello-v6/{element}"
+            ele_img = Image.open(ele_file_path).convert('RGB')
+            pixel_values.append(ele_img)  
         try:
-            img_mask = torch.ones(len(pixel_values)).bool().to(model.device)
+            ele_img_tensors = process_images(pixel_values, image_processor, args)
+            img_mask = torch.ones(ele_img_tensors.shape[0]).bool().to(model.device)
         except:
             print("Empty element images in ", entry['id'])
             continue        
+        ele_img_tensors = ele_img_tensors.to(model.device, dtype=torch.float16)
+
         merged_filelist = merge_lists_without_overlap(extract_unmasked_elements(entry['conversations'][0]['value']), invalid_filenames)
 
-        if "mpt" in model_name.lower():
-            roles = ('user', 'assistant')
-        else:
-            roles = conv.roles
-
-        template_id, page_num = entry['id'].split('_')
-        page_num = int(page_num)
-        
         if ('refine' in entry['image']) or ('complete' in entry['image']):
             image_file = f"crello-v6/images/{template_id}_1.png"
             image = online_rendering(args.data_path, image_file, merged_filelist, i_entry, args, entry['image']).convert('RGB')
@@ -497,8 +504,6 @@ def main(args):
 
         image_tensor = process_images([image], image_processor, args)
         image_tensor = image_tensor.to(model.device, dtype=torch.float16)
-
-
         # preprocessing prompt
         ## 1. remove invalid elements
         entry['conversations']= remove_elements(entry['conversations'], invalid_filenames)
@@ -536,9 +541,8 @@ def main(args):
         keywords = [stop_str]
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
-        ele_img_tensors = torch.tensor(pixel_values).to(image_tensor.device)
         ele_img_tensors = ele_img_tensors.to(torch.float16)  # Converts to float16 (half precision)
-
+        
         with torch.inference_mode():
             output_ids = model.generate(
                 input_ids,
@@ -558,17 +562,17 @@ def main(args):
         if args.debug or args.image_out:
             for r in ret[entry['id']][-1]:
                 for v in valid_filenames:
-                    if v['src'] == r['src']:
+                    if 'src' in v and v['src'] == r['src']:
                         r['file_name'] = v['file_name']
                         break
 
-            if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_{page_num:01}.jpg")):
+            if not os.path.isfile(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_00.jpg")):
                 try:
                     thumbnail_image_file = f"{args.data_path}/crello-v6/images/{template_id}_0.png"
                     thumbnail_img = Image.open(thumbnail_image_file).convert('RGB')
-                    thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_{page_num:01}.jpg"))
+                    thumbnail_img.save(os.path.join('/'.join(args.output_file.split('/')[:-1]), f"gt/{template_id}_00.jpg"))
                 except:
-                    print("{} is not existing!!".format(f"{template_id:08}_{page_num:01}.jpg"))
+                    print("{} is not existing!!".format(f"{template_id:08}"))
             if entry['image'] == 'refine': # refinement
                 image_file = f"crello-v6/images/{template_id}_1.png"
                 if len(invalid_filenames) > 0:
@@ -615,6 +619,8 @@ if __name__ == "__main__":
     parser.add_argument("--image-aspect-ratio", type=str, default='pad')
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
+    parser.add_argument("--exp_name", type=str, default=None)
+    parser.add_argument("--id", type=str, default=None)
     parser.add_argument("--json-file", type=str, required=True)
     parser.add_argument("--num-gpus", type=int, default=1)
     parser.add_argument("--ele_cache_path", type=str, default=None)
